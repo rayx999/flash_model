@@ -6,12 +6,45 @@
 #include <concepts>
 #include <cstdint>
 #include <optional>
+#include <array>
+#include <string_view>
 
 // Add this line immediately below the enum definition!
 // It tells magic_enum to scan all values from 0 up to 255 at compile time.
 #define MAGIC_ENUM_RANGE_MIN 0
 #define MAGIC_ENUM_RANGE_MAX 255
 #include <magic_enum.hpp>
+
+// The Hardware Specification Profile layout
+// ------------------------------------------
+struct FlashDeviceProfile {
+    std::string_view model_name;
+    std::array<uint8_t, 3> jedec_id;
+    size_t capacity_bytes;
+    uint8_t default_address_bytes;
+};
+
+// C++20 Concept to validate that a policy type matches the Flash specifications
+template <typename T>
+concept ValidFlashDevice = requires {
+    // 1. Enforce that T contains a static member called 'profile'
+    { T::profile } -> std::convertible_to<const FlashDeviceProfile&>;
+} && 
+// 2. Enforce that it can be evaluated at compile-time (constexpr check)
+requires {
+    typename std::integral_constant<size_t, T::profile.capacity_bytes>;
+    typename std::integral_constant<uint8_t, T::profile.default_address_bytes>;
+};
+
+// Define specific vendor hardware variations as compile-time constants
+struct MT25QU02GCBB {
+    static constexpr FlashDeviceProfile profile = {
+        .model_name = "Micron_MT25QU02GCBB",
+        .jedec_id = {0x20, 0xBB, 0x22}, // Matches your required 0x20, 0xBB, 0x22 values
+        .capacity_bytes = 256ULL * 1024 * 1024, // 2Gb Density (256MB)
+        .default_address_bytes = 4 // 2Gb density defaults to 4-byte address tracking
+    };
+};
 
 // Enforce valid Micron Flash address widths (3 bytes or 4 bytes only)
 template <size_t Width>
@@ -42,6 +75,8 @@ constexpr bool is_valid_bus_protocol(BusProtocol prot) {
     return magic_enum::enum_contains(prot);
 }
 
+// Coomands traits structure and compile-time command matrix
+// ---------------------------------------------------------
 struct CommandTraits {
     FlashCmd cmd;
     BusProtocol protocol;
@@ -105,10 +140,14 @@ inline std::optional<CommandTraits> get_traits(FlashCmd target) noexcept {
     }
 }
 
+// The main FlashModel SystemC module definition
+// ---------------------------------------------
+template <typename DevicePolicy>
+requires ValidFlashDevice<DevicePolicy>
 class FlashModel : public sc_core::sc_module {
 public:
     // TLM 2.0 target socket initialization
-    tlm_utils::simple_target_socket<FlashModel, 32> flash_socket;
+    tlm_utils::simple_target_socket<FlashModel<DevicePolicy>, 32> flash_socket;
 
     SC_HAS_PROCESS(FlashModel);
     
@@ -116,13 +155,10 @@ public:
         : sc_module(name), flash_socket("flash_socket") 
     {
         // Bind the transaction function using C++11/C++14 style lambdas cleanly
-        flash_socket.register_b_transport(this, &FlashModel::b_transport);
+        flash_socket.register_b_transport(this, &FlashModel<DevicePolicy>::b_transport);
     }
 
 private:
-    // Physical storage backing (2Gb Density = 256 MegaBytes)
-    static constexpr size_t FLASH_SIZE_BYTES = 256 * 1024 * 1024;
-    
     // Internal registers matching the hardware specification state machines
     bool m_reset_enabled{false};
 

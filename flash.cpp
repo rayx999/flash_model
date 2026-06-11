@@ -7,7 +7,8 @@
 // Bi-directional data: For read commands, the initiator creates an empty buffer,
 // writes the opcode/address at the front, and the target Flash model overwrites the trailing 
 // data bytes directly inside that same buffer before returning.
-void FlashModel::b_transport(tlm::tlm_generic_payload& trans, [[maybe_unused]] sc_core::sc_time& delay) noexcept {
+template <typename T>
+void FlashModel<T>::b_transport(tlm::tlm_generic_payload& trans, [[maybe_unused]] sc_core::sc_time& delay) noexcept {
     uint8_t*         data_ptr = trans.get_data_ptr();
     unsigned int     length   = trans.get_data_length();
 
@@ -32,7 +33,8 @@ void FlashModel::b_transport(tlm::tlm_generic_payload& trans, [[maybe_unused]] s
 }
 
 // Command controller execution unit
-int FlashModel::process_flash_cmd(CommandTraits& traits, uint8_t* stream, unsigned int len) noexcept {
+template <typename T>
+int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, unsigned int len) noexcept {
     int ret = 0; // Default to success
 
     switch (traits.cmd) {
@@ -60,12 +62,13 @@ int FlashModel::process_flash_cmd(CommandTraits& traits, uint8_t* stream, unsign
     return ret;
 }
 
-int FlashModel::read_id(uint8_t* stream, unsigned int len) noexcept {
+template <typename T>
+int FlashModel<T>::read_id(uint8_t* stream, unsigned int len) noexcept {
     // Populate the data stream with the expected JEDEC ID values
     if (len >= 3) {
-        stream[0] = 0x20; // Manufacturer ID (Micron)
-        stream[1] = 0xBB; // Memory Type: 1.8v
-        stream[2] = 0x22; // Capacity (2Gb)
+        stream[0] = T::profile.jedec_id[0]; // Manufacturer ID 
+        stream[1] = T::profile.jedec_id[1]; // Memory Type: 
+        stream[2] = T::profile.jedec_id[2]; // Capacity 
 
         SC_REPORT_INFO("FlashModel", "Read_ID successful.");
         return 0;
@@ -75,9 +78,21 @@ int FlashModel::read_id(uint8_t* stream, unsigned int len) noexcept {
     return -1; // Indicate an error if the buffer is too small
 }
 
-int FlashModel::read_flash(uint8_t* stream, unsigned int len) noexcept {
+template <typename T>
+int FlashModel<T>::read_flash(uint8_t* stream, unsigned int len) noexcept {
     // This is a placeholder for the actual read logic, which would involve
     // interpreting the address and dummy cycles from the command stream,
     // then populating the data stream with the requested flash memory contents.
     return 0;
 }
+
+// ============================================================================
+// Explicit Template Instantiations
+// ============================================================================
+// This forces the compiler to build the binary objects for these specific 
+// configurations right inside flash.cpp, making them visible to the linker.
+
+template class FlashModel<MT25QU02GCBB>;
+
+// If you add other profiles later (like Winbond), register them here too:
+// template class FlashModel<W25Q128>;

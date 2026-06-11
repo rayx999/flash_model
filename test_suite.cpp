@@ -7,7 +7,7 @@
 
 // Declare global unique_ptrs so they are accessible to Catch2 test cases
 // but live safely managed across the SystemC lifetime loop
-inline FlashModel* g_flash_device = nullptr;
+inline FlashModel<MT25QU02GCBB>* g_flash_device = nullptr;
 inline Testbench*  g_tb = nullptr;
 
 
@@ -50,7 +50,7 @@ public:
     int m_result{0};
 
     // Instantiate your hardware submodules directly as class data members!
-    FlashModel m_flash;
+    FlashModel<MT25QU02GCBB> m_flash;
     Testbench  m_tb;
 
     SC_HAS_PROCESS(SystemCTestRunner);
@@ -81,7 +81,16 @@ private:
 };
 
 int sc_main(int argc, char* argv[]) {
+    // 1. Explicitly silence INFO logs to clean up your testing terminal
     sc_core::sc_report_handler::set_actions(sc_core::SC_INFO, sc_core::SC_DO_NOTHING);
+
+    // 2. FORCE Errors to immediately print to standard error stream and trigger a break
+    sc_core::sc_report_handler::set_actions(
+        sc_core::SC_ERROR, SC_DISPLAY | SC_LOG);
+    
+    // 3. FORCE Fatal errors to immediately print and abort execution 
+    sc_core::sc_report_handler::set_actions(
+        sc_core::SC_FATAL, SC_UNSPECIFIED);
 
     // Instantiate the primary test coordinator module
     SystemCTestRunner runner("SystemC_Catch2_Bridge", argc, argv);
