@@ -50,6 +50,9 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
         case FlashCmd::ReadId:
             ret = read_id(stream, len);
             break;
+        case FlashCmd::ReadSFDP:
+            ret = read_sfdp(stream, len, traits.dummy_clocks); // You can expand this to handle the address and dummy cycles properly
+            break;
         case FlashCmd::FastRead:
             ret = read_flash(stream, len);
             break;
@@ -76,6 +79,29 @@ int FlashModel<T>::read_id(uint8_t* stream, unsigned int len) noexcept {
 
     SC_REPORT_ERROR("FlashModel", "Read_ID failed. Provided buffer is too small to hold the JEDEC ID.");
     return -1; // Indicate an error if the buffer is too small
+}
+
+template <typename T>
+int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept {
+    uint32_t addr = get_addr3(stream + 1); // SFDP read always assume 3 bytes address after the opcode
+    uint32_t dummy_cycles = stream[4]; //
+    
+    if (dummy_cycles != dummy_clocks) {
+        SC_REPORT_WARNING("FlashModel", make_msg(
+            "Provided dummy cycles %d do not match the expected value %d for this command.", 
+            dummy_cycles, dummy_clocks).c_str());
+    }
+
+    if (addr + len > T::profile.sfdp.size()) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Read_SFDP failed. Address 0x%x plus length 0x%x exceeds available SFDP data 0x%x.",
+            addr, len, T::profile.sfdp.size()).c_str());
+        return -1; // Indicate an error if the requested range is out of bounds
+    }
+
+    std::memcpy(stream, T::profile.sfdp.data() + addr, len); // Copy the requested SFDP data into the stream buffer
+    SC_REPORT_INFO("FlashModel", "Read_SFDP successful.");
+    return 0;
 }
 
 template <typename T>

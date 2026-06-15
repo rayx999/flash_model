@@ -27,19 +27,23 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         REQUIRE(spi_stream[1] == 0xBB); 
         REQUIRE(spi_stream[2] == 0x22); // Verifies Capacity ID overwritten by target
     }
-#if 0
-    SECTION("2. FAST_READ Address Mapping Stream Check") {
-        // Command 0x0B, Target Address 0x000004, followed by 2 bytes allocated for data readback
-        std::array<uint8_t, 6> spi_stream = { 
-            static_cast<uint8_t>(FlashCmd::FastRead), 
-            0x00, 0x00, 0x04, // 3 bytes Address
-            0x00, 0x00        // 2 bytes space for Data payload
+
+    SECTION("2. READ_SFDP Bi-directional Stream Check") {
+        std::array<uint8_t, 5> spi_stream = { 
+            static_cast<uint8_t>(FlashCmd::ReadSFDP), // Opcode
+            0x00, 0x00, 0x00, // 3 bytes Address
+            0x08        // 1 byte Dummy_cycles
         };
 
-        auto status = env.tb.exchange_stream(spi_stream.data(), spi_stream.size());
+        std::array<uint8_t, 5> sfdp_signature = {
+            'S', 'F', 'D', 'P'
+        };
+
+        auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
         REQUIRE(status == tlm::TLM_OK_RESPONSE);
+        REQUIRE(spi_stream == sfdp_signature); // Verifies that the entire stream was overwritten with the expected SFDP data
+
     }
-#endif    
 }
 
 // A dedicated top-level SystemC wrapper module to manage the testbench lifecycle safely
