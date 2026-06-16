@@ -15,6 +15,8 @@
 #define MAGIC_ENUM_RANGE_MAX 255
 #include <magic_enum.hpp>
 
+#include "flash_storage.h"
+
 // Helper for std::format missing in C++20, you can replace this with fmt::format if you have the fmt library available
 #include <sstream>
 #include <utility>
@@ -179,24 +181,46 @@ public:
     SC_HAS_PROCESS(FlashModel);
     
     explicit FlashModel(sc_core::sc_module_name name) 
-        : sc_module(name), flash_socket("flash_socket") 
+        : sc_module(name), flash_socket("flash_socket"), flash_storage("flash_storage") 
     {
+        flash_storage.open_storage("flash_backing_storage.bin", DevicePolicy::profile.capacity_bytes);
+
         // Bind the transaction function using C++11/C++14 style lambdas cleanly
         flash_socket.register_b_transport(this, &FlashModel<DevicePolicy>::b_transport);
     }
 
-private:
-    // utility
-    uint32_t get_addr3(uint8_t* stream) const noexcept {
-        return (stream[0] << 16) | (stream[1] << 8) | stream[2];
+    size_t get_capacity() const noexcept {
+        return DevicePolicy::profile.capacity_bytes;
     }
 
-    uint32_t get_addr4(uint8_t* stream) const noexcept {
-        return (stream[0] << 24) | (stream[1] << 16) | (stream[2] << 8) | stream[3];
+    std::string get_back_file_name() const noexcept {
+        return flash_storage.get_back_file_name();
+    }
+
+private:
+    // utility
+    uint32_t get_addr(uint8_t* stream, uint32_t len) const noexcept {
+        uint32_t addr = 0;
+        switch (len) {
+            case 3:
+                addr = ((uint32_t)stream[0] << 16) | 
+                       ((uint32_t)stream[1] << 8) | stream[2];
+                break;
+            case 4:
+                addr = ((uint32_t)stream[0] << 24) | 
+                       ((uint32_t)stream[1] << 16) | 
+                       ((uint32_t)stream[2] << 8) | stream[3];
+                break;
+            default:
+                SC_REPORT_ERROR("FlashModel", "Unsupported address length.");
+                return 0;
+        }
+        return addr;
     }
 
     // Internal registers matching the hardware specification state machines
     bool m_reset_enabled{false};
+    FlashStorage flash_storage; // Encapsulates the memory-mapped file storage logic
 
     // Core TLM blocking transport implementation method
     void b_transport(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay) noexcept;
@@ -206,6 +230,6 @@ private:
 
     int read_id(uint8_t* stream, unsigned int len) noexcept;
     int read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept;
-    int read_flash(uint8_t* stream, unsigned int len) noexcept;
+    int read_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept;
 };
 

@@ -54,7 +54,7 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
             ret = read_sfdp(stream, len, traits.dummy_clocks); // You can expand this to handle the address and dummy cycles properly
             break;
         case FlashCmd::FastRead:
-            ret = read_flash(stream, len);
+            ret = read_flash(traits, stream, len); // You can expand this to handle the address and dummy cycles properly
             break;
 
         default:
@@ -83,7 +83,7 @@ int FlashModel<T>::read_id(uint8_t* stream, unsigned int len) noexcept {
 
 template <typename T>
 int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept {
-    uint32_t addr = get_addr3(stream + 1); // SFDP read always assume 3 bytes address after the opcode
+    uint32_t addr = get_addr(stream + 1, 3); // SFDP read always assume 3 bytes address after the opcode
     uint32_t dummy_cycles = stream[4]; //
     
     if (dummy_cycles != dummy_clocks) {
@@ -105,10 +105,33 @@ int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_c
 }
 
 template <typename T>
-int FlashModel<T>::read_flash(uint8_t* stream, unsigned int len) noexcept {
-    // This is a placeholder for the actual read logic, which would involve
-    // interpreting the address and dummy cycles from the command stream,
-    // then populating the data stream with the requested flash memory contents.
+int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept {
+    uint32_t hdr_len = 1 + traits.address_bytes + 1; // Opcode + Address Bytes + Dummy Cycles Byte 
+    if (len <= hdr_len) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Read_Flash failed. Provided buffer length %d is too small to hold the command header of %d bytes.",
+            len, hdr_len).c_str());
+        return -1; // Indicate an error if the buffer is too small to hold the command header
+    }
+
+    uint32_t addr = get_addr(stream + 1, traits.address_bytes); // Read the address bytes based on the command traits
+    uint32_t dummy_cycles = stream[1 + traits.address_bytes]; //
+    
+    if (dummy_cycles != traits.dummy_clocks) [[unlikely]] {
+        SC_REPORT_WARNING("FlashModel", make_msg(
+            "Provided dummy cycles %d do not match the expected value %d for this command.", 
+            dummy_cycles, traits.dummy_clocks).c_str());
+    }
+
+    if (addr + len > T::profile.capacity_bytes) [[unlikely]] {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Read_Flash failed. Address 0x%x plus length 0x%x exceeds flash capacity 0x%x.",
+            addr, len, T::profile.capacity_bytes).c_str());
+        return -1; // Indicate an error if the requested range is out of bounds
+    }
+
+    flash_storage.read(stream + hdr_len, addr, len - hdr_len); // Read the requested flash data into the stream buffer
+    SC_REPORT_INFO("FlashModel", "Read_Flash successful.");
     return 0;
 }
 

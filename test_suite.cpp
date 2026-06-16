@@ -5,11 +5,28 @@
 #include "flash.h"
 #include "testbench.h"
 
+#include <fstream>
+#include <array>
+#include <span>
+
 // Declare global unique_ptrs so they are accessible to Catch2 test cases
 // but live safely managed across the SystemC lifetime loop
 inline FlashModel<MT25QU02GCBB>* g_flash_device = nullptr;
 inline Testbench*  g_tb = nullptr;
 
+// Helper to easily inject golden mock data into the backing file from a test case
+void plant_flash_data(const std::string& filepath, size_t offset, std::span<const uint8_t> data) {
+    // Open the existing storage file in binary, input/output modification mode
+    std::ofstream fs(filepath, std::ios::in | std::ios::out | std::ios::binary);
+    if (!fs.is_open()) {
+        FAIL("Failed to open the flash storage file to plant mock test data.");
+    }
+    
+    // Seek to the designated physical flash address offset
+    fs.seekp(offset, std::ios::beg);
+    fs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    fs.close();
+}
 
 TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
     SECTION("1. READ_ID Bi-directional Stream Check") {
@@ -44,6 +61,41 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         REQUIRE(spi_stream == sfdp_signature); // Verifies that the entire stream was overwritten with the expected SFDP data
 
     }
+
+    SECTION("3. FAST_READ with 3-byte address check") {
+        uint32_t data_len = std::rand() % 256 + 1; // Random data length between 1 and 256 bytes
+        uint32_t addr = std::rand() % (g_flash_device->get_capacity() - data_len); // Random address within bounds
+        addr %= 0x1000000; // Ensure it fits within 3 bytes
+        std::vector<uint8_t> golden_data(data_len);
+        std::iota(golden_data.begin(), golden_data.end(), std::rand() % 256); // Fill with random values
+
+        // Insert test data into flash backing file at the correct offset so the model can read it back during the test
+        plant_flash_data(g_flash_device->get_back_file_name(), addr, golden_data);
+
+        // 1. Calculate overall stream size: 
+        // 1 byte (Opcode) + 3 bytes (Address) + 1 byte (Dummy Clock) + Variable Response Data Size
+        size_t total_stream_size = 1 + 3 + 1 + data_len;
+        std::vector<uint8_t> fast_read(total_stream_size, 0x00);
+
+        // 2. Compose the structural SPI Command Stream protocol header
+        fast_read[0] = static_cast<uint8_t>(FlashCmd::FastRead);
+        fast_read[1] = static_cast<uint8_t>((addr >> 16) & 0xFF); // Address Byte 2 (MSB)
+        fast_read[2] = static_cast<uint8_t>((addr >> 8) & 0xFF);  // Address Byte 1
+        fast_read[3] = static_cast<uint8_t>(addr & 0xFF);         // Address Byte 0 (LSB)
+        fast_read[4] = 0x08;                                      // Dummy clock byte cycle overhead
+
+        // 3. Fire the execution stream over your SystemC simulation interface
+        auto status = g_tb->exchange_stream(fast_read.data(), fast_read.size());
+        
+        // 4. Assertions
+        REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+        // FIXED: Isolate the readback payload window using a C++20 view to match against golden_data
+        auto readback_window = std::span<const uint8_t>(fast_read.data() + 5, data_len);
+        // Explicitly forces an element-by-element deep comparison 
+        REQUIRE(std::equal(readback_window.begin(), readback_window.end(), golden_data.begin(), golden_data.end()));
+    }
+
 }
 
 // A dedicated top-level SystemC wrapper module to manage the testbench lifecycle safely
@@ -85,6 +137,9 @@ private:
 };
 
 int sc_main(int argc, char* argv[]) {
+    // Seed the random number generator for any randomized test data generation
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
     // 1. Explicitly silence INFO logs to clean up your testing terminal
     sc_core::sc_report_handler::set_actions(sc_core::SC_INFO, sc_core::SC_DO_NOTHING);
 
