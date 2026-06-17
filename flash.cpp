@@ -18,8 +18,8 @@ void FlashModel<T>::b_transport(tlm::tlm_generic_payload& trans, [[maybe_unused]
     }
 
     // Check for valid flash command types first
-    FlashCmd incoming_op = static_cast<FlashCmd>(data_ptr[0]);
-    auto traits_opt = get_traits(incoming_op);
+    FlashCmd op = static_cast<FlashCmd>(data_ptr[0]);
+    auto traits_opt = get_traits(op, BusProtocol::Extended_SPI);
     if (!traits_opt.has_value()) {
         // Handle the invalid command error immediately!
         SC_REPORT_ERROR("FlashModel", "Received an invalid or unassigned Flash Command code.");
@@ -53,6 +53,7 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
         case FlashCmd::ReadSFDP:
             ret = read_sfdp(stream, len, traits.dummy_clocks); // You can expand this to handle the address and dummy cycles properly
             break;
+        case FlashCmd::Read:
         case FlashCmd::FastRead:
             ret = read_flash(traits, stream, len); // You can expand this to handle the address and dummy cycles properly
             break;
@@ -115,8 +116,21 @@ int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size
     }
 
     uint32_t addr = get_addr(stream + 1, traits.address_bytes); // Read the address bytes based on the command traits
-    uint32_t dummy_cycles = stream[1 + traits.address_bytes]; //
-    
+    BusProtocol protocol = static_cast<BusProtocol>(stream[1 + traits.address_bytes] >> 4); // Extract the bus protocol from the upper bits of the dummy clock byte
+    uint32_t dummy_cycles = stream[1 + traits.address_bytes] & 0xF; // low 4 bits, max 14
+
+    if (protocol != traits.protocol) [[unlikely]] {
+        SC_REPORT_WARNING("FlashModel", make_msg(
+            "Provided bus protocol %d do not match the expected value %d for this command.", 
+            protocol, traits.protocol).c_str());
+    }
+
+    if (dummy_cycles != traits.dummy_clocks) [[unlikely]] {
+        SC_REPORT_WARNING("FlashModel", make_msg(
+            "Provided dummy cycles %d do not match the expected value %d for this command.", 
+            dummy_cycles, traits.dummy_clocks).c_str());
+    }
+
     if (dummy_cycles != traits.dummy_clocks) [[unlikely]] {
         SC_REPORT_WARNING("FlashModel", make_msg(
             "Provided dummy cycles %d do not match the expected value %d for this command.", 

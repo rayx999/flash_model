@@ -28,6 +28,50 @@ void plant_flash_data(const std::string& filepath, size_t offset, std::span<cons
     fs.close();
 }
 
+template <uint8_t AddrBytes, uint8_t DummyClocks>
+requires (ValidAddressMode<AddrBytes> && ValidDummyCycles<DummyClocks>)
+void read_flash_test(const FlashCmd cmd, const BusProtocol prot) noexcept {
+    REQUIRE(g_tb != nullptr); // Sanity check to ensure the global testbench pointer is valid
+    REQUIRE(g_flash_device != nullptr); // Sanity check to ensure the global flash model pointer is valid
+    REQUIRE((is_valid_flash_cmd(cmd) && is_valid_bus_protocol(prot))); // Ensure the command and protocol are valid
+
+    uint32_t data_len = std::rand() % 256 + 1; // Random data length between 1 and 256 bytes
+    uint32_t addr = std::rand() % (g_flash_device->get_capacity() - data_len); // Random address within bounds
+    if (AddrBytes == 3) addr %= (0x1000000); // Ensure it fits within 3 bytes
+    std::vector<uint8_t> golden_data(data_len);
+    std::iota(golden_data.begin(), golden_data.end(), std::rand() % 256); // Fill with random values
+
+    // Insert test data into flash backing file at the correct offset so the model can read it back during the test
+    plant_flash_data(g_flash_device->get_back_file_name(), addr, golden_data);
+
+    // 1. Calculate overall stream size: 
+    // 1 byte (Opcode) + 3 bytes (Address) + 1 byte (Dummy Clock + Bus protocol) + Variable Response Data Size
+    size_t total_stream_size = 1 + AddrBytes + 1 + data_len;
+    std::vector<uint8_t> read_stream(total_stream_size, 0x00);
+
+    // 2. Compose the structural SPI Command Stream protocol header
+    uint32_t stream_idx = 0;
+    read_stream[stream_idx++] = static_cast<uint8_t>(cmd);
+    if (AddrBytes == 4) {
+        read_stream[stream_idx++] = static_cast<uint8_t>((addr >> 24) & 0xFF); // Address Byte 3 (MSB)
+    } 
+    read_stream[stream_idx++] = static_cast<uint8_t>((addr >> 16) & 0xFF); // Address Byte 2 
+    read_stream[stream_idx++] = static_cast<uint8_t>((addr >> 8) & 0xFF);  // Address Byte 1
+    read_stream[stream_idx++] = static_cast<uint8_t>(addr & 0xFF);         // Address Byte 0 (LSB)
+    read_stream[stream_idx++] = (static_cast<uint8_t>(prot) << 4) | (DummyClocks & 0xF); // Bus protocol and dummy clock byte cycle overhead
+
+    // 3. Fire the execution stream over your SystemC simulation interface
+    auto status = g_tb->exchange_stream(read_stream.data(), read_stream.size());
+    
+    // 4. Assertions
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+    // FIXED: Isolate the readback payload window using a C++20 view to match against golden_data
+    auto readback_window = std::span<const uint8_t>(read_stream.data() + 5, data_len);
+    // Explicitly forces an element-by-element deep comparison 
+    REQUIRE(std::equal(readback_window.begin(), readback_window.end(), golden_data.begin(), golden_data.end()));
+}
+
 TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
     SECTION("1. READ_ID Bi-directional Stream Check") {
         REQUIRE(g_tb != nullptr); // Sanity check to ensure the global testbench pointer is valid
@@ -62,38 +106,12 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
 
     }
 
-    SECTION("3. FAST_READ with 3-byte address check") {
-        uint32_t data_len = std::rand() % 256 + 1; // Random data length between 1 and 256 bytes
-        uint32_t addr = std::rand() % (g_flash_device->get_capacity() - data_len); // Random address within bounds
-        addr %= 0x1000000; // Ensure it fits within 3 bytes
-        std::vector<uint8_t> golden_data(data_len);
-        std::iota(golden_data.begin(), golden_data.end(), std::rand() % 256); // Fill with random values
+    SECTION("3. READ with 3-byte address check") {
+        read_flash_test<3, 0>(FlashCmd::Read, BusProtocol::Extended_SPI);
+    }
 
-        // Insert test data into flash backing file at the correct offset so the model can read it back during the test
-        plant_flash_data(g_flash_device->get_back_file_name(), addr, golden_data);
-
-        // 1. Calculate overall stream size: 
-        // 1 byte (Opcode) + 3 bytes (Address) + 1 byte (Dummy Clock) + Variable Response Data Size
-        size_t total_stream_size = 1 + 3 + 1 + data_len;
-        std::vector<uint8_t> fast_read(total_stream_size, 0x00);
-
-        // 2. Compose the structural SPI Command Stream protocol header
-        fast_read[0] = static_cast<uint8_t>(FlashCmd::FastRead);
-        fast_read[1] = static_cast<uint8_t>((addr >> 16) & 0xFF); // Address Byte 2 (MSB)
-        fast_read[2] = static_cast<uint8_t>((addr >> 8) & 0xFF);  // Address Byte 1
-        fast_read[3] = static_cast<uint8_t>(addr & 0xFF);         // Address Byte 0 (LSB)
-        fast_read[4] = 0x08;                                      // Dummy clock byte cycle overhead
-
-        // 3. Fire the execution stream over your SystemC simulation interface
-        auto status = g_tb->exchange_stream(fast_read.data(), fast_read.size());
-        
-        // 4. Assertions
-        REQUIRE(status == tlm::TLM_OK_RESPONSE);
-
-        // FIXED: Isolate the readback payload window using a C++20 view to match against golden_data
-        auto readback_window = std::span<const uint8_t>(fast_read.data() + 5, data_len);
-        // Explicitly forces an element-by-element deep comparison 
-        REQUIRE(std::equal(readback_window.begin(), readback_window.end(), golden_data.begin(), golden_data.end()));
+    SECTION("4. FAST_READ with 3-byte address check") {
+        read_flash_test<3, 8>(FlashCmd::FastRead, BusProtocol::Extended_SPI);
     }
 
 }

@@ -80,7 +80,7 @@ concept ValidAddressMode = (Width == 3) || (Width == 4);
 
 // Enforce valid dummy clock ranges based on Micron hardware restrictions
 template <uint8_t Cycles>
-concept ValidDummyCycles = (Cycles >= 1) && (Cycles <= 14);
+concept ValidDummyCycles = (Cycles >= 0) && (Cycles <= 14);
 
 // Special concept for commands that do not use addresses/dummy clocks (like Reset)
 template <size_t Width, uint8_t Cycles>
@@ -91,7 +91,8 @@ enum class FlashCmd : uint8_t {
     ResetMemory = 0x99, // RESET MEMORY Command
     ReadId      = 0x9F, // JEDEC READ ID Command
     ReadSFDP    = 0x5A, // READ SFDP Command
-    FastRead    = 0x0B, // 1-1-1 Fast Read Command
+    Read        = 0x03, // 1-1-1 Read Command
+    FastRead    = 0x0B, // 1-1-1, 2-2-2, 4-4-4 Fast Read Command
     Read4Byte   = 0x13  // 4-BYTE READ Command
 };
 constexpr bool is_valid_flash_cmd(FlashCmd cmd) {
@@ -136,33 +137,45 @@ private:
         : cmd(c), protocol(p), address_bytes(a), dummy_clocks(d) {}
 };
 
-// A flat array containing exactly 256 command entries
+// A flat array containing exactly 256 command entries * 4 BusProtocols = 1024 total entries, 
+// but we will only populate valid ones. This allows for O(1) lookup of command traits at runtime 
+// without any hashing or branching, as the command byte directly maps to an index in this array. 
+// The bus protocol is encoded in the upper bits of the index to allow for multiple protocols with the same command code.
 // Lives in contiguous memory, meaning perfect CPU L1-Cache utilization
-inline constexpr std::array<CommandTraits, 256> CommandMatrix = []() {
-    std::array<CommandTraits, 256> table{};
-
+inline constexpr std::array<CommandTraits, 256 * 4> CommandMatrix = []() {
+    // 4 bus protocols * 256 possible command codes = 1024 total entries, but we will only populate valid ones
+    std::array<CommandTraits, 256 * 4> table{}; 
     // Define a local helper lambda right here!
     // It captures nothing, takes an enum, and converts it to its raw index size_t.
-    auto idx = [](FlashCmd cmd) constexpr { return static_cast<size_t>(cmd); };
+    auto idx = [](FlashCmd cmd, BusProtocol prot) constexpr { 
+        uint32_t p = static_cast<uint32_t>(prot) << 8;
+        uint32_t c = static_cast<uint32_t>(cmd);
+        return static_cast<size_t>(p | c); 
+    };
 
     // Initialize array at compile-time...
-    table[idx(FlashCmd::ResetEnable)] = CommandTraits::create<0, 0>(FlashCmd::ResetEnable, BusProtocol::Extended_SPI);
-    table[idx(FlashCmd::ResetMemory)] = CommandTraits::create<0, 0>(FlashCmd::ResetMemory, BusProtocol::Extended_SPI);
-    table[idx(FlashCmd::ReadId)]      = CommandTraits::create<0, 0>(FlashCmd::ReadId,      BusProtocol::Extended_SPI);
-    table[idx(FlashCmd::ReadSFDP)]    = CommandTraits::create<3, 8>(FlashCmd::ReadSFDP,    BusProtocol::Extended_SPI);
-    table[idx(FlashCmd::FastRead)]    = CommandTraits::create<3, 8>(FlashCmd::FastRead,    BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::ResetEnable, BusProtocol::Extended_SPI)] = CommandTraits::create<0, 0>(FlashCmd::ResetEnable, BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::ResetMemory, BusProtocol::Extended_SPI)] = CommandTraits::create<0, 0>(FlashCmd::ResetMemory, BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::ReadId,      BusProtocol::Extended_SPI)] = CommandTraits::create<0, 0>(FlashCmd::ReadId,      BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::ReadSFDP,    BusProtocol::Extended_SPI)] = CommandTraits::create<3, 8>(FlashCmd::ReadSFDP,    BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::Read,        BusProtocol::Extended_SPI)] = CommandTraits::create<3, 0>(FlashCmd::Read,        BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::FastRead,    BusProtocol::Extended_SPI)] = CommandTraits::create<3, 8>(FlashCmd::FastRead,    BusProtocol::Extended_SPI);
+    table[idx(FlashCmd::Read4Byte,   BusProtocol::Extended_SPI)] = CommandTraits::create<4, 8>(FlashCmd::Read4Byte,   BusProtocol::Extended_SPI);
     return table;
 }();
 
 // Pure O(1) runtime lookup tool for your SystemC b_transport method
-inline std::optional<CommandTraits> get_traits(FlashCmd target) noexcept {
-    auto idx = static_cast<size_t>(target);
+inline std::optional<CommandTraits> get_traits(FlashCmd cmd, BusProtocol prot) noexcept {
+    uint32_t p = static_cast<uint32_t>(prot) << 8;
+    uint32_t c = static_cast<uint32_t>(cmd);
+    auto idx =  static_cast<size_t>(p | c);     
+    
     if (idx >= CommandMatrix.size()) [[unlikely]] {
         return std::nullopt; // Out-of-bounds command code, immediately return no traits
     }
 
     const auto& traits = CommandMatrix[idx];
-    if (traits.cmd == target) [[likely]] {
+    if (traits.cmd == cmd) [[likely]] {
         return traits; // Valid command found, return its traits
     } else {
         return std::nullopt; // No valid command traits found for this target
