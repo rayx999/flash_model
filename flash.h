@@ -74,7 +74,17 @@ enum class FlashCmd : uint8_t {
     Exit4Byte   = 0xE9, // EXIT 4-BYTE ADDRESS MODE Command
     Read        = 0x03, // 1-1-1 Read Command
     FastRead    = 0x0B, // 1-1-1, 2-2-2, 4-4-4 Fast Read Command
-    Read4Byte   = 0x13  // 4-BYTE READ Command
+    DtrFastRead = 0x0D, // 1-1-1, 2-2-2, 4-4-4 Fast Read Command
+    QuadOutputFastRead = 0x6B, // 1-1-4, 4-4-4 Quad Output Fast Read Command    
+    DtrQuadOutputFastRead = 0x6D, // 1-1-4, 4-4-4 Quad Output Fast Read Command    
+    QuadInputOutputFastRead = 0xEB, // 1-4-4, 4-4-4 Quad Input/Output Fast Read Command    
+    DtrQuadInputOutputFastRead = 0xED, // 1-4-4, 4-4-4 Quad Input/Output Fast Read Command    
+    Read4Byte   = 0x13,  // 4-BYTE READ Command, 1-1-1
+    FastRead4Byte = 0x0C,  // 4-BYTE Fast Read Command, 1-1-1 2-2-2 4-4-4
+    DtrFastRead4Byte = 0x0E,  // 4-BYTE Fast Read Command DTR, 1-1-1 2-2-2 4-4-4    
+    QuadOutputFastRead4Byte = 0x6C,  // 4-BYTE Quad Output Fast Read Command, 1-1-4 4-4-4
+    QuadInputOutputFastRead4Byte = 0xEC,   // 4-BYTE Quad Input/Output Fast Read Command, 1-4-4 4-4-4
+    DtrQuadInputOutputFastRead4Byte = 0xEE   // 4-BYTE Quad Input/Output Fast Read Command DTR, 4-4-4
 };
 constexpr bool is_valid_flash_cmd(FlashCmd cmd) {
     // magic_enum automatically scans the enum and checks if 'cmd' matches a valid identifier
@@ -159,18 +169,19 @@ struct CommandTraits {
     FlashCmd cmd;
     BusProtocol protocol;
     AddressBytes requested_address_bytes; // 0 for all, 4 for 4-byte addresses
+    uint8_t force_dtr; // native DTR command regardless config.transfer_rate
     uint8_t dummy_clocks_str;
     uint8_t dummy_clocks_dtr;
 
     // You must explicitly provide a default constructor so the std::array can initialize empty slots
     constexpr CommandTraits() : cmd(static_cast<FlashCmd>(0)), protocol(BusProtocol::Extended_SPI), 
-        requested_address_bytes(AddressBytes::ADDR_LEN_ANY), dummy_clocks_str(0), dummy_clocks_dtr(0) {}
+        requested_address_bytes(AddressBytes::ADDR_LEN_ANY), force_dtr(0), dummy_clocks_str(0), dummy_clocks_dtr(0) {}
 
     // A Templated Factory Function that intercepts variables and forces concept validation
     template <uint8_t DummyClocksStr, uint8_t DummyClocksDtr>
     requires (ValidDummyCycles<DummyClocksStr> && ValidDummyCycles<DummyClocksDtr>)
     static constexpr CommandTraits create(FlashCmd c, BusProtocol p = BusProtocol::Extended_SPI, 
-        AddressBytes a = AddressBytes::ADDR_LEN_ANY) {
+        AddressBytes a = AddressBytes::ADDR_LEN_ANY, bool force_dtr = false) {
         if (!is_valid_flash_cmd(c)) {
             throw "Error: Attempted to create CommandTraits with an unassigned raw command ID!";
         }
@@ -183,13 +194,28 @@ struct CommandTraits {
             throw "Error: Attempted to create CommandTraits with an invalid requested address byte value!";
         }
 
-        return CommandTraits{c, p, a, DummyClocksStr, DummyClocksDtr};
+        return CommandTraits{c, p, a, force_dtr, DummyClocksStr, DummyClocksDtr};
     } 
+
+    template <uint8_t DummyClocksStr, uint8_t DummyClocksDtr>
+    static constexpr CommandTraits create(FlashCmd c, AddressBytes a) {
+        return create<DummyClocksStr, DummyClocksDtr>(c, BusProtocol::Extended_SPI, a, false);
+    }
+
+    template <uint8_t DummyClocksStr, uint8_t DummyClocksDtr>
+    static constexpr CommandTraits create(FlashCmd c, bool force_dtr) {
+        return create<DummyClocksStr, DummyClocksDtr>(c, BusProtocol::Extended_SPI, AddressBytes::ADDR_LEN_ANY, force_dtr);
+    }
+
+    template <uint8_t DummyClocksStr, uint8_t DummyClocksDtr>
+    static constexpr CommandTraits create(FlashCmd c, AddressBytes a, bool force_dtr) {
+        return create<DummyClocksStr, DummyClocksDtr>(c, BusProtocol::Extended_SPI, a, force_dtr);
+    }
 
 private:
     // Private backing constructor to prevent un-validated structures
-    constexpr CommandTraits(FlashCmd c, BusProtocol p, AddressBytes a, uint8_t d_str, uint8_t d_dtr)
-        : cmd(c), protocol(p), requested_address_bytes(a), dummy_clocks_str(d_str), dummy_clocks_dtr(d_dtr) {}
+    constexpr CommandTraits(FlashCmd c, BusProtocol p, AddressBytes a, bool f_dtr, uint8_t d_str, uint8_t d_dtr)
+        : cmd(c), protocol(p), requested_address_bytes(a), force_dtr(f_dtr ? 1 : 0), dummy_clocks_str(d_str), dummy_clocks_dtr(d_dtr) {}
 };
 
 // A flat array containing exactly 256 command entries * 4 BusProtocols = 1024 total entries, 
@@ -219,7 +245,17 @@ inline constexpr std::array<CommandTraits, 256 * 4> CommandMatrix = []() {
     table[idx(FlashCmd::Exit4Byte  ) ] = CommandTraits::create<0, 0>(FlashCmd::Exit4Byte  );
     table[idx(FlashCmd::Read       ) ] = CommandTraits::create<0, 0>(FlashCmd::Read       );
     table[idx(FlashCmd::FastRead   ) ] = CommandTraits::create<8, 6>(FlashCmd::FastRead   );
-    table[idx(FlashCmd::Read4Byte  ) ] = CommandTraits::create<0, 0>(FlashCmd::Read4Byte, BusProtocol::Extended_SPI, AddressBytes::ADDR_LEN_4);
+    table[idx(FlashCmd::DtrFastRead) ] = CommandTraits::create<0, 6>(FlashCmd::DtrFastRead, true);    
+    table[idx(FlashCmd::QuadOutputFastRead)]    = CommandTraits::create<8, 6>(FlashCmd::QuadOutputFastRead);
+    table[idx(FlashCmd::DtrQuadOutputFastRead)] = CommandTraits::create<0, 6>(FlashCmd::DtrQuadOutputFastRead, true);
+    table[idx(FlashCmd::QuadInputOutputFastRead)]    = CommandTraits::create<10, 8>(FlashCmd::QuadInputOutputFastRead);      
+    table[idx(FlashCmd::DtrQuadInputOutputFastRead)] = CommandTraits::create<0, 8>(FlashCmd::DtrQuadInputOutputFastRead, true);      
+    table[idx(FlashCmd::Read4Byte)]     = CommandTraits::create<0, 0>(FlashCmd::Read4Byte, AddressBytes::ADDR_LEN_4);
+    table[idx(FlashCmd::FastRead4Byte)]    = CommandTraits::create<8, 6>(FlashCmd::FastRead4Byte, AddressBytes::ADDR_LEN_4);    
+    table[idx(FlashCmd::DtrFastRead4Byte)] = CommandTraits::create<0, 6>(FlashCmd::DtrFastRead4Byte, AddressBytes::ADDR_LEN_4, true);      
+    table[idx(FlashCmd::QuadOutputFastRead4Byte)] = CommandTraits::create<8, 6>(FlashCmd::QuadOutputFastRead4Byte, AddressBytes::ADDR_LEN_4);    
+    table[idx(FlashCmd::QuadInputOutputFastRead4Byte)] = CommandTraits::create<10, 8>(FlashCmd::QuadInputOutputFastRead4Byte, AddressBytes::ADDR_LEN_4);    
+    table[idx(FlashCmd::DtrQuadInputOutputFastRead4Byte)] = CommandTraits::create<0, 8>(FlashCmd::DtrQuadInputOutputFastRead4Byte, AddressBytes::ADDR_LEN_4, true);    
     return table;
 }();
 

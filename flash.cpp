@@ -71,13 +71,26 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
             break;
         case FlashCmd::Read:
         case FlashCmd::FastRead:
+        case FlashCmd::DtrFastRead:        
+        case FlashCmd::QuadOutputFastRead:
+        case FlashCmd::DtrQuadOutputFastRead:        
+        case FlashCmd::QuadInputOutputFastRead:
+        case FlashCmd::DtrQuadInputOutputFastRead:
         case FlashCmd::Read4Byte:
+        case FlashCmd::FastRead4Byte:
+        case FlashCmd::DtrFastRead4Byte:        
+        case FlashCmd::QuadOutputFastRead4Byte:
+        case FlashCmd::QuadInputOutputFastRead4Byte:
+        case FlashCmd::DtrQuadInputOutputFastRead4Byte:        
             ret = read_flash(traits, stream, len); // You can expand this to handle the address and dummy cycles properly
             break;
 
         default:
             // Handle further program/erase sequences directly
             ret = -1; // Indicate an error for unhandled but valid commands
+            SC_REPORT_ERROR("FlashModel", make_msg(
+                "Received a Flash Command code that is recognized but not yet implemented in the command processor. Command: 0x%02X",
+                static_cast<uint8_t>(traits.cmd)).c_str()); 
             break;
     }
     return ret;
@@ -148,21 +161,23 @@ int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size
     BusProtocol protocol = T::get_bus_protocol();
     if (protocol != traits.protocol) [[unlikely]] {
         SC_REPORT_WARNING("FlashModel", make_msg(
-            "Provided bus protocol %d do not match the expected value %d for this command.", 
-            protocol, traits.protocol).c_str());
+            "Provided bus protocol %d do not match the expected value %d for this command 0x%02X.", 
+            protocol, traits.protocol, traits.cmd).c_str());
     }
 
     TransferRate transfer_rate = T::get_transfer_rate();
-    if (transfer_rate == TransferRate::STR && dummy_cycles != traits.dummy_clocks_str) [[unlikely]] {
-        SC_REPORT_WARNING("FlashModel", make_msg(
-            "Provided dummy cycles %d do not match the expected value %d for this command.", 
-            dummy_cycles, traits.dummy_clocks_str).c_str());
+    if ((!traits.force_dtr && transfer_rate == TransferRate::STR) && dummy_cycles != traits.dummy_clocks_str) [[unlikely]] {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Provided dummy cycles %d do not match the expected DTR dummy cycles %d for this command 0x%02X.", 
+            dummy_cycles, traits.dummy_clocks_str, traits.cmd).c_str());
+        return -1;
     }
 
-    if (transfer_rate == TransferRate::DTR && dummy_cycles != traits.dummy_clocks_dtr) [[unlikely]] {
-        SC_REPORT_WARNING("FlashModel", make_msg(
-            "Provided dummy cycles %d do not match the expected value %d for this command.", 
-            dummy_cycles, traits.dummy_clocks_dtr).c_str());
+    if ((traits.force_dtr || transfer_rate == TransferRate::DTR) && dummy_cycles != traits.dummy_clocks_dtr) [[unlikely]] {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Provided dummy cycles %d do not match the expected STR dummy cycles %d for this command 0x%02X.", 
+            dummy_cycles, traits.dummy_clocks_dtr, traits.cmd).c_str());
+            return -1;
     }
 
     if (addr + len > T::profile.capacity_bytes) [[unlikely]] {

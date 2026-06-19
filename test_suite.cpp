@@ -110,11 +110,31 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         read_flash_test<3, 0>(FlashCmd::Read);
     }
 
-    SECTION("4. FAST_READ with 3-byte address 1-1-1") {
+    SECTION("4. FAST_READ with 3-byte address 1-1-1 STR") {
         read_flash_test<3, 8>(FlashCmd::FastRead);
     }
 
-    SECTION("5. Enter 4-Byte Mode 1-0-0") {
+    SECTION("5. DTR_FAST_READ with 3-byte address 1-1-1 DTR") {
+        read_flash_test<3, 6>(FlashCmd::DtrFastRead);
+    }
+
+    SECTION("6. QUAD_OUTPUT_FAST_READ with 3-byte address 1-1-4 STR") {
+        read_flash_test<3, 8>(FlashCmd::QuadOutputFastRead);
+    }
+
+    SECTION("7. DTR_QUAD_OUTPUT_FAST_READ with 3-byte address 1-1-4 DTR") {
+        read_flash_test<3, 6>(FlashCmd::DtrQuadOutputFastRead);
+    }
+
+    SECTION("8. QUAD_INPUT_OUTPUT_FAST_READ with 3-byte address 1-4-4 STR") {
+        read_flash_test<3, 10>(FlashCmd::QuadInputOutputFastRead);
+    }
+
+    SECTION("9. DTR_QUAD_INPUT_OUTPUT_FAST_READ with 3-byte address 1-4-4 DTR") {
+        read_flash_test<3, 8>(FlashCmd::DtrQuadInputOutputFastRead);
+    }
+
+    SECTION("10. Enter 4-Byte Mode 1-0-0") {
         std::array<uint8_t, 1> spi_stream;
 
         spi_stream[0] = static_cast<uint8_t>(FlashCmd::WriteEnable); // Opcode
@@ -130,8 +150,28 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         REQUIRE(status == tlm::TLM_OK_RESPONSE);
     }
 
-    SECTION("6. READ_4BYTE with 4-byte address 1-1-1") {
+    SECTION("11. READ_4BYTE with 4-byte address 1-1-1") {
         read_flash_test<4, 0>(FlashCmd::Read4Byte);
+    }
+
+    SECTION("12. FAST_READ_4BYTE with 4-byte address 1-1-1 STR") {
+        read_flash_test<4, 8>(FlashCmd::FastRead4Byte);
+    }
+
+    SECTION("13. DTR_FAST_READ_4BYTE with 4-byte address 1-1-1 DTR") {
+        read_flash_test<4, 6>(FlashCmd::DtrFastRead4Byte);
+    }
+
+    SECTION("14. QUAD_OUTPUT_FAST_READ_4BYTE with 4-byte address 1-1-4 STR") {
+        read_flash_test<4, 8>(FlashCmd::QuadOutputFastRead4Byte);
+    }
+
+    SECTION("15. QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 1-4-4 STR") {
+        read_flash_test<4, 10>(FlashCmd::QuadInputOutputFastRead4Byte);
+    }
+
+    SECTION("16. DTR_QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 1-4-4 STR") {
+        read_flash_test<4, 8>(FlashCmd::DtrQuadInputOutputFastRead4Byte);
     }
 }
 
