@@ -15,7 +15,7 @@ inline FlashModel<MT25QU02GCBB>* g_flash_device = nullptr;
 inline Testbench*  g_tb = nullptr;
 
 // Helper to easily inject golden mock data into the backing file from a test case
-void plant_flash_data(const std::string& filepath, size_t offset, std::span<const uint8_t> data) {
+static void plant_flash_data(const std::string& filepath, size_t offset, std::span<const uint8_t> data) {
     // Open the existing storage file in binary, input/output modification mode
     std::ofstream fs(filepath, std::ios::in | std::ios::out | std::ios::binary);
     if (!fs.is_open()) {
@@ -26,6 +26,35 @@ void plant_flash_data(const std::string& filepath, size_t offset, std::span<cons
     fs.seekp(offset, std::ios::beg);
     fs.write(reinterpret_cast<const char*>(data.data()), data.size());
     fs.close();
+}
+
+static void fetch_flash_data(const std::string& filepath, size_t offset, std::span<uint8_t> data) {
+    // Open the existing storage file in binary, input/output modification mode
+    std::ifstream fs(filepath, std::ios::in | std::ios::binary);
+    if (!fs.is_open()) {
+        FAIL("Failed to open the flash storage file to plant mock test data.");
+    }
+    
+    // Seek to the designated physical flash address offset
+    fs.seekg(offset, std::ios::beg);
+    fs.read(reinterpret_cast<char*>(data.data()), data.size());
+    fs.close();
+}
+
+static void write_enable() {
+    std::array<uint8_t, 1> spi_stream;
+
+    spi_stream[0] = static_cast<uint8_t>(FlashCmd::WriteEnable); // Opcode
+    auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+}
+
+static void write_disable() {
+    std::array<uint8_t, 1> spi_stream;
+    
+    spi_stream[0] = static_cast<uint8_t>(FlashCmd::WriteDisable); // Opcode
+    auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
 }
 
 template <uint8_t AddrBytes, uint8_t DummyClocks>
@@ -48,29 +77,69 @@ void read_flash_test(const FlashCmd cmd) noexcept {
     // 1 byte (Opcode) + AddressBytes + 1 byte (Dummy Clock + Bus protocol) + Variable Response Data Size
     uint32_t hdr_len = 1 + AddrBytes + 1; // Header length before the data payload
     size_t total_stream_size = hdr_len + data_len;
-    std::vector<uint8_t> read_stream(total_stream_size, 0x00);
+    std::vector<uint8_t> cmd_stream(total_stream_size, 0x00);
 
     // 2. Compose the structural SPI Command Stream protocol header
     uint32_t stream_idx = 0;
-    read_stream[stream_idx++] = static_cast<uint8_t>(cmd);
+    cmd_stream[stream_idx++] = static_cast<uint8_t>(cmd);
     if (AddrBytes == 4) {
-        read_stream[stream_idx++] = static_cast<uint8_t>((addr >> 24) & 0xFF); // Address Byte 3 (MSB)
+        cmd_stream[stream_idx++] = static_cast<uint8_t>((addr >> 24) & 0xFF); // Address Byte 3 (MSB)
     } 
-    read_stream[stream_idx++] = static_cast<uint8_t>((addr >> 16) & 0xFF); // Address Byte 2 
-    read_stream[stream_idx++] = static_cast<uint8_t>((addr >> 8) & 0xFF);  // Address Byte 1
-    read_stream[stream_idx++] = static_cast<uint8_t>(addr & 0xFF);         // Address Byte 0 (LSB)
-    read_stream[stream_idx++] = static_cast<uint8_t>(DummyClocks & 0xFF); // Bus protocol and dummy clock byte cycle overhead
+    cmd_stream[stream_idx++] = static_cast<uint8_t>((addr >> 16) & 0xFF); // Address Byte 2 
+    cmd_stream[stream_idx++] = static_cast<uint8_t>((addr >> 8) & 0xFF);  // Address Byte 1
+    cmd_stream[stream_idx++] = static_cast<uint8_t>(addr & 0xFF);         // Address Byte 0 (LSB)
+    cmd_stream[stream_idx++] = static_cast<uint8_t>(DummyClocks & 0xFF); // Bus protocol and dummy clock byte cycle overhead
         
     // 3. Fire the execution stream over your SystemC simulation interface
-    auto status = g_tb->exchange_stream(read_stream.data(), read_stream.size());
+    auto status = g_tb->exchange_stream(cmd_stream.data(), cmd_stream.size());
     
     // 4. Assertions
     REQUIRE(status == tlm::TLM_OK_RESPONSE);
 
     // FIXED: Isolate the readback payload window using a C++20 view to match against golden_data
-    auto readback_window = std::span<const uint8_t>(read_stream.data() + hdr_len, data_len);
+    auto readback_window = std::span<const uint8_t>(cmd_stream.data() + hdr_len, data_len);
     // Explicitly forces an element-by-element deep comparison 
     REQUIRE(std::equal(readback_window.begin(), readback_window.end(), golden_data.begin(), golden_data.end()));
+}
+
+template <uint8_t AddrBytes> requires (ValidAddressMode<AddrBytes>)
+void erase_flash_test(const FlashCmd cmd) noexcept {
+    REQUIRE(g_tb != nullptr); // Sanity check to ensure the global testbench pointer is valid
+    REQUIRE(g_flash_device != nullptr); // Sanity check to ensure the global flash model pointer is valid
+    REQUIRE(is_valid_flash_cmd(cmd)); // Ensure the command and protocol are valid
+
+    uint32_t addr = std::rand() % (g_flash_device->get_capacity()); // Random address within bounds
+    if (AddrBytes == 3) addr %= (0x1000000); // Ensure it fits within 3 bytes
+    size_t size = g_flash_device->get_erase_size(cmd);
+    size_t start = (addr & ~(size - 1)); // mask to the beginning of erase unit
+
+    // 1. Calculate overall stream size: 
+    // 1 byte (Opcode) + AddressBytes + 1 byte (Dummy Clock + Bus protocol) + Variable Response Data Size
+    uint32_t hdr_len = 1 + AddrBytes + 1; // Header length before the data payload
+    std::vector<uint8_t> cmd_stream(hdr_len, 0x00);
+
+    // 2. Compose the structural SPI Command Stream protocol header
+    uint32_t stream_idx = 0;
+    cmd_stream[stream_idx++] = static_cast<uint8_t>(cmd);
+    if (AddrBytes == 4) {
+        cmd_stream[stream_idx++] = static_cast<uint8_t>((addr >> 24) & 0xFF); // Address Byte 3 (MSB)
+    } 
+    cmd_stream[stream_idx++] = static_cast<uint8_t>((addr >> 16) & 0xFF); // Address Byte 2 
+    cmd_stream[stream_idx++] = static_cast<uint8_t>((addr >> 8) & 0xFF);  // Address Byte 1
+    cmd_stream[stream_idx++] = static_cast<uint8_t>(addr & 0xFF);         // Address Byte 0 (LSB)
+        
+    // 3. Fire the execution stream over your SystemC simulation interface
+    auto status = g_tb->exchange_stream(cmd_stream.data(), cmd_stream.size());
+    
+    // 4. Assertions
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+    // Insert test data into flash backing file at the correct offset so the model can read it back during the test
+    std::vector<uint8_t> golden_data(size, 0xFF);
+    std::vector<uint8_t> erased_data(size);
+    fetch_flash_data(g_flash_device->get_back_file_name(), start, erased_data);
+    // Explicitly forces an element-by-element deep comparison 
+    REQUIRE(std::equal(erased_data.begin(), erased_data.end(), golden_data.begin(), golden_data.end()));
 }
 
 TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
@@ -91,19 +160,23 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
     }
 
     SECTION("2. READ_SFDP Bi-directional Stream Check") {
-        std::array<uint8_t, 5> spi_stream = { 
+        std::array<uint8_t, 256> spi_stream = { 
             static_cast<uint8_t>(FlashCmd::ReadSFDP), // Opcode
             0x00, 0x00, 0x00, // 3 bytes Address
             0x08        // 1 byte Dummy_cycles
         };
 
-        std::array<uint8_t, 5> sfdp_signature = {
+        std::array<uint8_t, 4> sfdp_signature = {
             'S', 'F', 'D', 'P'
         };
 
         auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+        bool sfdp_matches = std::equal(
+            spi_stream.begin() + 5, spi_stream.begin() + 5 + sfdp_signature.size(), // Isolate the readback window indices
+            sfdp_signature.begin(), sfdp_signature.end()
+        );
         REQUIRE(status == tlm::TLM_OK_RESPONSE);
-        REQUIRE(spi_stream == sfdp_signature); // Verifies that the entire stream was overwritten with the expected SFDP data
+        REQUIRE(sfdp_matches);
     }
 
     SECTION("3. READ with 3-byte address 1-1-1") {
@@ -134,7 +207,31 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         read_flash_test<3, 8>(FlashCmd::DtrQuadInputOutputFastRead);
     }
 
-    SECTION("10. Enter 4-Byte Mode 1-0-0") {
+    SECTION("10. ERASE_SECTOR with 3-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<3>(FlashCmd::EraseSector);
+        write_disable();
+    }
+
+    SECTION("11. ERASE_SUBSECTOR_32KB with 3-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<3>(FlashCmd::EraseSubsector32KB);
+        write_disable();      
+    }
+
+    SECTION("12. ERASE_SUBSECTOR_4KB with 3-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<3>(FlashCmd::EraseSubsector4KB);
+        write_disable();    
+    }
+
+    SECTION("13. ERASE_DIE with 3-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<3>(FlashCmd::EraseDie);
+        write_disable();
+    }
+
+    SECTION("14. Enter 4-Byte Mode 1-0-0") {
         std::array<uint8_t, 1> spi_stream;
 
         spi_stream[0] = static_cast<uint8_t>(FlashCmd::WriteEnable); // Opcode
@@ -150,28 +247,46 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         REQUIRE(status == tlm::TLM_OK_RESPONSE);
     }
 
-    SECTION("11. READ_4BYTE with 4-byte address 1-1-1") {
+    SECTION("15. READ_4BYTE with 4-byte address 1-1-1") {
         read_flash_test<4, 0>(FlashCmd::Read4Byte);
     }
 
-    SECTION("12. FAST_READ_4BYTE with 4-byte address 1-1-1 STR") {
+    SECTION("16. FAST_READ_4BYTE with 4-byte address 1-1-1 STR") {
         read_flash_test<4, 8>(FlashCmd::FastRead4Byte);
     }
 
-    SECTION("13. DTR_FAST_READ_4BYTE with 4-byte address 1-1-1 DTR") {
+    SECTION("17. DTR_FAST_READ_4BYTE with 4-byte address 1-1-1 DTR") {
         read_flash_test<4, 6>(FlashCmd::DtrFastRead4Byte);
     }
 
-    SECTION("14. QUAD_OUTPUT_FAST_READ_4BYTE with 4-byte address 1-1-4 STR") {
+    SECTION("18. QUAD_OUTPUT_FAST_READ_4BYTE with 4-byte address 1-1-4 STR") {
         read_flash_test<4, 8>(FlashCmd::QuadOutputFastRead4Byte);
     }
 
-    SECTION("15. QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 1-4-4 STR") {
+    SECTION("19. QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 1-4-4 STR") {
         read_flash_test<4, 10>(FlashCmd::QuadInputOutputFastRead4Byte);
     }
 
-    SECTION("16. DTR_QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 1-4-4 STR") {
+    SECTION("20. DTR_QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 1-4-4 STR") {
         read_flash_test<4, 8>(FlashCmd::DtrQuadInputOutputFastRead4Byte);
+    }
+
+    SECTION("21. ERASE_SECTOR_4BYTE with 4-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<4>(FlashCmd::EraseSector4Byte);
+        write_disable();
+    }
+
+    SECTION("22. ERASE_SUBSECTOR_32KB_4BYTE with 4-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<4>(FlashCmd::EraseSubsector32KB4Byte);
+        write_disable();      
+    }
+
+    SECTION("23. ERASE_SUBSECTOR_4KB_4BYTE with 4-byte address 1-1-0") {
+        write_enable();
+        erase_flash_test<4>(FlashCmd::EraseSubsector4KB4Byte);
+        write_disable();    
     }
 }
 

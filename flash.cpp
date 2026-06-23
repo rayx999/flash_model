@@ -85,6 +85,16 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
             ret = read_flash(traits, stream, len); // You can expand this to handle the address and dummy cycles properly
             break;
 
+        case FlashCmd::EraseSector:
+        case FlashCmd::EraseSubsector4KB:
+        case FlashCmd::EraseSubsector32KB:
+        case FlashCmd::EraseDie:
+        case FlashCmd::EraseSector4Byte:
+        case FlashCmd::EraseSubsector4KB4Byte:
+        case FlashCmd::EraseSubsector32KB4Byte:
+            ret = erase_flash(traits, stream, len);
+            break;
+
         default:
             // Handle further program/erase sequences directly
             ret = -1; // Indicate an error for unhandled but valid commands
@@ -116,7 +126,8 @@ template <typename T>
 int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept {
     uint32_t addr = get_addr(stream + 1, 3); // SFDP read always assume 3 bytes address after the opcode
     uint32_t dummy_cycles = stream[4]; //
-    
+    uint32_t hdr_len = 1 + 3 + 1; // Opcode + Address Bytes + Dummy Cycles Byte 
+
     if (dummy_cycles != dummy_clocks) {
         SC_REPORT_WARNING("FlashModel", make_msg(
             "Provided dummy cycles %d do not match the expected value %d for this command.", 
@@ -130,7 +141,7 @@ int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_c
         return -1; // Indicate an error if the requested range is out of bounds
     }
 
-    std::memcpy(stream, T::profile.sfdp.data() + addr, len); // Copy the requested SFDP data into the stream buffer
+    std::memcpy(stream + hdr_len, T::profile.sfdp.data() + addr, len); // Copy the requested SFDP data into the stream buffer
     SC_REPORT_INFO("FlashModel", "Read_SFDP successful.");
     return 0;
 }
@@ -180,15 +191,59 @@ int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size
             return -1;
     }
 
-    if (addr + len > T::profile.capacity_bytes) [[unlikely]] {
+    if (addr + len > get_capacity()) [[unlikely]] {
         SC_REPORT_ERROR("FlashModel", make_msg(
             "Read_Flash failed. Address 0x%x plus length 0x%x exceeds flash capacity 0x%x.",
-            addr, len, T::profile.capacity_bytes).c_str());
+            addr, len, get_capacity()).c_str());
         return -1; // Indicate an error if the requested range is out of bounds
     }
 
     flash_storage.read(stream + hdr_len, addr, len - hdr_len); // Read the requested flash data into the stream buffer
     SC_REPORT_INFO("FlashModel", "Read_Flash successful.");
+    return 0;
+}
+
+template <typename T>
+int FlashModel<T>::erase_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept {
+    if (!m_write_enabled) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Erase_Flash failed. write_enable is false.").c_str());
+        return -1;
+    }
+
+    AddressBytes address_len = T::get_addr_len();
+    if (traits.requested_address_bytes != AddressBytes::ADDR_LEN_ANY &&
+        traits.requested_address_bytes != address_len) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Erase_Flash failed. Command requires %d address bytes but current address len %d.",
+            traits.requested_address_bytes, address_len).c_str());
+        return -1; // Indicate an error if the address length does not match the command's requirement
+    }
+
+    uint32_t addr_len = static_cast<uint32_t>(address_len);
+    uint32_t hdr_len = 1 + addr_len + 1; // Opcode + Address Bytes + Dummy Cycles Byte 
+    if (len < hdr_len) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Erase_Flash failed. Provided buffer length %d is too small to hold the command header of %d bytes.",
+            len, hdr_len).c_str());
+        return -1; // Indicate an error if the buffer is too small to hold the command header
+    }
+
+    size_t addr = get_addr(stream + 1, addr_len); // Read the address bytes based on the command traits
+    size_t size = get_erase_size(traits.cmd);
+    size_t start = (addr & ~(size - 1)); // mask to the beginning of erase unit
+
+    if (start + size > get_capacity()) [[unlikely]] {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Erase_Flash failed. Address 0x%x plus length 0x%x exceeds flash capacity 0x%x.",
+            addr, size, get_capacity()).c_str());
+        return -1; // Indicate an error if the requested range is out of bounds
+    }
+
+    std::vector<uint8_t> buf(size, 0xFF);
+    flash_storage.write(buf.data(), start, size); // Read the requested flash data into the stream buffer
+
+    SC_REPORT_INFO("FlashModel", "Erase_Flash successful.");
     return 0;
 }
 

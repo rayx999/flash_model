@@ -59,7 +59,11 @@ struct FlashDeviceProfile {
     std::string_view model_name;
     std::array<uint8_t, 3> jedec_id;
     std::array<uint8_t, 256> sfdp;
-    size_t capacity_bytes;
+    uint32_t sector_num;
+    uint32_t sector_size;
+    uint32_t subsector_32KB_num; 
+    uint32_t subsector_4KB_num;
+    uint32_t die_num;
     FlashDeviceConfig config;
 };
 
@@ -72,6 +76,7 @@ enum class FlashCmd : uint8_t {
     WriteDisable= 0x04, // WRITE DISABLE Command
     Enter4Byte  = 0xB7, // ENTER 4-BYTE ADDRESS MODE Command
     Exit4Byte   = 0xE9, // EXIT 4-BYTE ADDRESS MODE Command
+    // Read category commands
     Read        = 0x03, // 1-1-1 Read Command
     FastRead    = 0x0B, // 1-1-1, 2-2-2, 4-4-4 Fast Read Command
     DtrFastRead = 0x0D, // 1-1-1, 2-2-2, 4-4-4 Fast Read Command
@@ -84,7 +89,15 @@ enum class FlashCmd : uint8_t {
     DtrFastRead4Byte = 0x0E,  // 4-BYTE Fast Read Command DTR, 1-1-1 2-2-2 4-4-4    
     QuadOutputFastRead4Byte = 0x6C,  // 4-BYTE Quad Output Fast Read Command, 1-1-4 4-4-4
     QuadInputOutputFastRead4Byte = 0xEC,   // 4-BYTE Quad Input/Output Fast Read Command, 1-4-4 4-4-4
-    DtrQuadInputOutputFastRead4Byte = 0xEE   // 4-BYTE Quad Input/Output Fast Read Command DTR, 4-4-4
+    DtrQuadInputOutputFastRead4Byte = 0xEE,   // 4-BYTE Quad Input/Output Fast Read Command DTR, 4-4-4
+    // Erase category commands
+    EraseSector = 0xD8, // Erase sector 1-1-0 2-2-0 4-4-0
+    EraseSubsector4KB = 0x20, // Erase 4KB subsector 1-1-0 2-2-0 4-4-0
+    EraseSubsector32KB = 0x52, // Erase 32KB subsector 1-1-0 2-2-0 4-4-0
+    EraseDie = 0xC4, // Erase whole die 1-1-0 2-2-0 4-4-0
+    EraseSector4Byte = 0xDC, // 4-BYTE Erase sector 1-1-0 2-2-0 4-4-0
+    EraseSubsector4KB4Byte = 0x21, // 4-BYTE Erase 4KB subsector 1-1-0 2-2-0 4-4-0
+    EraseSubsector32KB4Byte = 0x5C // 4-BYTE Erase 32KB subsector 1-1-0 2-2-0 4-4-0
 };
 constexpr bool is_valid_flash_cmd(FlashCmd cmd) {
     // magic_enum automatically scans the enum and checks if 'cmd' matches a valid identifier
@@ -118,8 +131,30 @@ struct MT25QU02GCBB {
     static inline FlashDeviceProfile profile = {
         .model_name = "Micron_MT25QU02GCBB",
         .jedec_id = {0x20, 0xBB, 0x22}, // Matches your required 0x20, 0xBB, 0x22 values
-        .sfdp = { 'S', 'F', 'D', 'P' }, // You can populate this with actual SFDP data if needed
-        .capacity_bytes = 256ULL * 1024 * 1024, // 2Gb Density (256MB)
+        // from tn2506_sfdp_for_mt25q.pdf
+        .sfdp = {
+        /* 00h */        0x53, 0x46, 0x44, 0x50, 0x06, 0x01, 0x01, 0xFF, 0x00, 0x06, 0x01, 0x10, 0x30, 0x00, 0x00, 0xFF,
+        /* 10h */        0x84, 0x00, 0x01, 0x02, 0x80, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        /* 20h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        /* 30h */        0xE5, 0x20, 0xFB, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x29, 0xEB, 0x27, 0x6B, 0x27, 0x3B, 0x27, 0xBB,
+        /* 40h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x27, 0xBB, 0xFF, 0xFF, 0x29, 0xEB, 0x0C, 0x20, 0x10, 0xD8,
+        /* 50h */        0x0F, 0x52, 0x00, 0x00, 0x24, 0x4A, 0x99, 0x00, 0x8B, 0x8E, 0x03, 0xE1, 0xAC, 0x01, 0x27, 0x38,
+        /* 60h */        0x7A, 0x75, 0x7A, 0x75, 0xFB, 0xBD, 0xD5, 0x5C, 0x4A, 0x0F, 0x82, 0xFF, 0x81, 0xBD, 0x3D, 0x36,
+        /* 70h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        /* 80h */        0xFF, 0xE7, 0xFF, 0xFF, 0x21, 0xDC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* 90h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* A0h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* B0h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* C0h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* D0h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* E0h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		/* F0h */        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        },   
+        .sector_num = 4096,
+        .sector_size = 65536,
+        .subsector_32KB_num = 8192,
+        .subsector_4KB_num = 65536,
+        .die_num = 8,
         .config = {
             .dummy_cycles = 15, // 1111 = default dummy for each read command
             .xip_mode = 7, // 111 = disable (default)
@@ -132,6 +167,18 @@ struct MT25QU02GCBB {
             .addr_len = 1 // 0 = 4-byte address, 1 = 3-byte address (default)
         }
     };
+
+    static uint32_t subsector_32KB_size() noexcept {
+        return profile.sector_size / 2;
+    }
+
+    static uint32_t subsector_4KB_size() noexcept {
+        return profile.sector_size / 16;
+    }
+
+    static uint32_t die_size() noexcept {
+        return profile.sector_size * profile.sector_num;
+    }
 
     static AddressBytes get_addr_len() noexcept {
         return profile.config.addr_len == 0 ? AddressBytes::ADDR_LEN_4 : AddressBytes::ADDR_LEN_3;
@@ -243,6 +290,7 @@ inline constexpr std::array<CommandTraits, 256 * 4> CommandMatrix = []() {
     table[idx(FlashCmd::WriteDisable)] = CommandTraits::create<0, 0>(FlashCmd::WriteDisable);
     table[idx(FlashCmd::Enter4Byte ) ] = CommandTraits::create<0, 0>(FlashCmd::Enter4Byte );
     table[idx(FlashCmd::Exit4Byte  ) ] = CommandTraits::create<0, 0>(FlashCmd::Exit4Byte  );
+    // Read category commands
     table[idx(FlashCmd::Read       ) ] = CommandTraits::create<0, 0>(FlashCmd::Read       );
     table[idx(FlashCmd::FastRead   ) ] = CommandTraits::create<8, 6>(FlashCmd::FastRead   );
     table[idx(FlashCmd::DtrFastRead) ] = CommandTraits::create<0, 6>(FlashCmd::DtrFastRead, true);    
@@ -255,9 +303,18 @@ inline constexpr std::array<CommandTraits, 256 * 4> CommandMatrix = []() {
     table[idx(FlashCmd::DtrFastRead4Byte)] = CommandTraits::create<0, 6>(FlashCmd::DtrFastRead4Byte, AddressBytes::ADDR_LEN_4, true);      
     table[idx(FlashCmd::QuadOutputFastRead4Byte)] = CommandTraits::create<8, 6>(FlashCmd::QuadOutputFastRead4Byte, AddressBytes::ADDR_LEN_4);    
     table[idx(FlashCmd::QuadInputOutputFastRead4Byte)] = CommandTraits::create<10, 8>(FlashCmd::QuadInputOutputFastRead4Byte, AddressBytes::ADDR_LEN_4);    
-    table[idx(FlashCmd::DtrQuadInputOutputFastRead4Byte)] = CommandTraits::create<0, 8>(FlashCmd::DtrQuadInputOutputFastRead4Byte, AddressBytes::ADDR_LEN_4, true);    
+    table[idx(FlashCmd::DtrQuadInputOutputFastRead4Byte)] = CommandTraits::create<0, 8>(FlashCmd::DtrQuadInputOutputFastRead4Byte, AddressBytes::ADDR_LEN_4, true);   
+    // Erase category commands
+    table[idx(FlashCmd::EraseSector)] = CommandTraits::create<0, 0>(FlashCmd::EraseSector); 
+    table[idx(FlashCmd::EraseSubsector4KB)] = CommandTraits::create<0, 0>(FlashCmd::EraseSubsector4KB); 
+    table[idx(FlashCmd::EraseSubsector32KB)] = CommandTraits::create<0, 0>(FlashCmd::EraseSubsector32KB); 
+    table[idx(FlashCmd::EraseDie)] = CommandTraits::create<0, 0>(FlashCmd::EraseDie); 
+    table[idx(FlashCmd::EraseSector4Byte)] = CommandTraits::create<0, 0>(FlashCmd::EraseSector4Byte, AddressBytes::ADDR_LEN_4); 
+    table[idx(FlashCmd::EraseSubsector4KB4Byte)] = CommandTraits::create<0, 0>(FlashCmd::EraseSubsector4KB4Byte, AddressBytes::ADDR_LEN_4); 
+    table[idx(FlashCmd::EraseSubsector32KB4Byte)] = CommandTraits::create<0, 0>(FlashCmd::EraseSubsector32KB4Byte, AddressBytes::ADDR_LEN_4); 
     return table;
 }();
+
 
 // Pure O(1) runtime lookup tool for your SystemC b_transport method
 template <typename T>
@@ -280,8 +337,7 @@ inline std::optional<CommandTraits> get_traits(FlashCmd cmd) noexcept {
 
 // The main FlashModel SystemC module definition
 // ---------------------------------------------
-template <typename DevicePolicy>
-requires ValidFlashDevice<DevicePolicy>
+template <typename DevicePolicy> requires ValidFlashDevice<DevicePolicy>
 class FlashModel : public sc_core::sc_module {
 public:
     // TLM 2.0 target socket initialization
@@ -292,14 +348,42 @@ public:
     explicit FlashModel(sc_core::sc_module_name name) 
         : sc_module(name), flash_socket("flash_socket"), flash_storage("flash_storage") 
     {
-        flash_storage.open_storage("flash_backing_storage.bin", DevicePolicy::profile.capacity_bytes);
+        flash_storage.open_storage("flash_backing_storage.bin", get_capacity());
 
         // Bind the transaction function using C++11/C++14 style lambdas cleanly
         flash_socket.register_b_transport(this, &FlashModel<DevicePolicy>::b_transport);
     }
 
     size_t get_capacity() const noexcept {
-        return DevicePolicy::profile.capacity_bytes;
+        size_t die_size = DevicePolicy::profile.sector_size * DevicePolicy::profile.sector_num;
+        return DevicePolicy::profile.die_num * die_size;
+    }
+
+    size_t get_erase_size(const FlashCmd cmd) const noexcept {
+        size_t size = 0;
+    
+        switch (cmd)
+        {
+        case FlashCmd::EraseSubsector32KB:
+        case FlashCmd::EraseSubsector32KB4Byte:
+            size = DevicePolicy::subsector_32KB_size();
+            break;
+        case FlashCmd::EraseSubsector4KB:
+        case FlashCmd::EraseSubsector4KB4Byte:
+            size = DevicePolicy::subsector_4KB_size();
+            break;
+        case FlashCmd::EraseSector:
+        case FlashCmd::EraseSector4Byte:
+            size = DevicePolicy::profile.sector_size;
+            break;
+        case FlashCmd::EraseDie:
+            size = DevicePolicy::die_size();
+            break;
+        default:
+            break;
+        }
+    
+        return size;
     }
 
     std::string get_back_file_name() const noexcept {
@@ -341,5 +425,6 @@ private:
     int read_id(uint8_t* stream, unsigned int len) noexcept;
     int read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept;
     int read_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept;
+    int erase_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept;
 };
 

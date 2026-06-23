@@ -55,12 +55,17 @@ public:
         return 0xFF; // Unprogrammed flash default state
     }
 
-        // Direct O(1) random-access read block
-    int read( uint8_t* stream, const uint32_t addr, const size_t len) const noexcept {
+    // Direct O(1) random-access read block
+    int read(uint8_t* stream, const uint32_t addr, const size_t len) const noexcept {
         std::copy_n(m_file_ptr + addr, len, stream);
         return len; 
     }
 
+    int write(uint8_t* stream, const uint32_t addr, const size_t len) noexcept {
+        std::copy_n(stream, len, m_file_ptr + addr);
+        return len;
+    }
+    
     ~FlashStorage() {
         if (m_file_ptr != nullptr) ::munmap(m_file_ptr, m_size);
         if (m_fd >= 0) ::close(m_fd);
