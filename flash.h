@@ -97,7 +97,14 @@ enum class FlashCmd : uint8_t {
     EraseDie = 0xC4, // Erase whole die 1-1-0 2-2-0 4-4-0
     EraseSector4Byte = 0xDC, // 4-BYTE Erase sector 1-1-0 2-2-0 4-4-0
     EraseSubsector4KB4Byte = 0x21, // 4-BYTE Erase 4KB subsector 1-1-0 2-2-0 4-4-0
-    EraseSubsector32KB4Byte = 0x5C // 4-BYTE Erase 32KB subsector 1-1-0 2-2-0 4-4-0
+    EraseSubsector32KB4Byte = 0x5C, // 4-BYTE Erase 32KB subsector 1-1-0 2-2-0 4-4-0
+    // Program commands
+    ProgramPage = 0x02, // PAGE PROGRAM 1-1-1 2-2-2 4-4-4
+    QuadInputFastProgram = 0x32, // QUAD INPUT FAST PROGRAM 1-1-4 4-4-4
+    ExtendedQuadInputFastProgram = 0x38, // EXTENDED QUAD INPUT FAST PROGRAM 1-4-4 4-4-4
+    ProgramPage4Byte = 0x12, // 4-BYTE PAGE PROGRAM 1-1-1 2-2-2 4-4-4
+    QuadInputFastProgram4Byte = 0x34, // 4-BYTE QUAD INPUT FAST PROGRAM 1-1-4 4-4-4
+    ExtendedQuadInputFastProgram4Byte = 0x3E // 4-BYTE EXTENDED QUAD INPUT FAST PROGRAM 1-4-4 4-4-4
 };
 constexpr bool is_valid_flash_cmd(FlashCmd cmd) {
     // magic_enum automatically scans the enum and checks if 'cmd' matches a valid identifier
@@ -312,6 +319,13 @@ inline constexpr std::array<CommandTraits, 256 * 4> CommandMatrix = []() {
     table[idx(FlashCmd::EraseSector4Byte)] = CommandTraits::create<0, 0>(FlashCmd::EraseSector4Byte, AddressBytes::ADDR_LEN_4); 
     table[idx(FlashCmd::EraseSubsector4KB4Byte)] = CommandTraits::create<0, 0>(FlashCmd::EraseSubsector4KB4Byte, AddressBytes::ADDR_LEN_4); 
     table[idx(FlashCmd::EraseSubsector32KB4Byte)] = CommandTraits::create<0, 0>(FlashCmd::EraseSubsector32KB4Byte, AddressBytes::ADDR_LEN_4); 
+    // Program category command
+    table[idx(FlashCmd::ProgramPage)] = CommandTraits::create<0, 0>(FlashCmd::ProgramPage); 
+    table[idx(FlashCmd::QuadInputFastProgram)] = CommandTraits::create<0, 0>(FlashCmd::QuadInputFastProgram); 
+    table[idx(FlashCmd::ExtendedQuadInputFastProgram)] = CommandTraits::create<0, 0>(FlashCmd::ExtendedQuadInputFastProgram); 
+    table[idx(FlashCmd::ProgramPage4Byte)] = CommandTraits::create<0, 0>(FlashCmd::ProgramPage4Byte, AddressBytes::ADDR_LEN_4); 
+    table[idx(FlashCmd::QuadInputFastProgram4Byte)] = CommandTraits::create<0, 0>(FlashCmd::QuadInputFastProgram4Byte, AddressBytes::ADDR_LEN_4); 
+    table[idx(FlashCmd::ExtendedQuadInputFastProgram4Byte)] = CommandTraits::create<0, 0>(FlashCmd::ExtendedQuadInputFastProgram4Byte, AddressBytes::ADDR_LEN_4); 
     return table;
 }();
 
@@ -426,5 +440,6 @@ private:
     int read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept;
     int read_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept;
     int erase_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept;
+    int program_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept;
 };
 
