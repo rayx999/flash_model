@@ -1,4 +1,4 @@
-#Nor Flash Model
+# Nor Flash Model
 This is C++20 based behavior model for Nor flash. It's targeted for some product flash chips, start with Micro MT25QU02GCBB.
 The model requires following external packages:
 - Accellera SystemC https://github.com/accellera-official/systemc/archive/refs/tags/3.0.2.tar.gz
