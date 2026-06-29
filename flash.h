@@ -111,7 +111,15 @@ enum class FlashCmd : uint8_t {
     ExtendedQuadInputFastProgram = 0x38, // EXTENDED QUAD INPUT FAST PROGRAM 1-4-4 4-4-4
     ProgramPage4Byte = 0x12, // 4-BYTE PAGE PROGRAM 1-1-1 2-2-2 4-4-4
     QuadInputFastProgram4Byte = 0x34, // 4-BYTE QUAD INPUT FAST PROGRAM 1-1-4 4-4-4
-    ExtendedQuadInputFastProgram4Byte = 0x3E // 4-BYTE EXTENDED QUAD INPUT FAST PROGRAM 1-4-4 4-4-4
+    ExtendedQuadInputFastProgram4Byte = 0x3E, // 4-BYTE EXTENDED QUAD INPUT FAST PROGRAM 1-4-4 4-4-4
+    // Dual SPI Read commands
+    DualOutputFastRead = 0x3B,       // 1-1-2 Dual Output Fast Read
+    DualInputOutputFastRead = 0xBB,  // 1-2-2 Dual I/O Fast Read
+    DtrDualOutputFastRead = 0x3D,    // 1-1-2 Dual Output Fast Read DTR
+    DtrDualInputOutputFastRead = 0xBD, // 1-2-2 Dual I/O Fast Read DTR
+    DualOutputFastRead4Byte = 0x3C,       // 4-BYTE 1-1-2 Dual Output Fast Read
+    DualInputOutputFastRead4Byte = 0xBC,   // 4-BYTE 1-2-2 Dual I/O Fast Read
+    DtrDualInputOutputFastRead4Byte = 0xBE  // 4-BYTE 1-2-2 Dual I/O Fast Read DTR
 };
 constexpr bool is_valid_flash_cmd(FlashCmd cmd) {
     // magic_enum automatically scans the enum and checks if 'cmd' matches a valid identifier
@@ -344,6 +352,14 @@ inline constexpr std::array<CommandTraits, 256> CommandMatrix = []() {
     table[idx(FlashCmd::EraseSector4Byte)] = CommandTraits::create_addr_len_4(FlashCmd::EraseSector4Byte); 
     table[idx(FlashCmd::EraseSubsector4KB4Byte)] = CommandTraits::create_addr_len_4(FlashCmd::EraseSubsector4KB4Byte); 
     table[idx(FlashCmd::EraseSubsector32KB4Byte)] = CommandTraits::create_addr_len_4(FlashCmd::EraseSubsector32KB4Byte); 
+    // Dual SPI Read commands
+    table[idx(FlashCmd::DualOutputFastRead)] = CommandTraits::create<{8, 6}, {8, 6}, {0, 0}>(FlashCmd::DualOutputFastRead);
+    table[idx(FlashCmd::DualInputOutputFastRead)] = CommandTraits::create<{4, 4}, {4, 4}, {0, 0}>(FlashCmd::DualInputOutputFastRead);
+    table[idx(FlashCmd::DtrDualOutputFastRead)] = CommandTraits::create<{0, 6}, {0, 6}, {0, 0}>(FlashCmd::DtrDualOutputFastRead, AddressBytes::ADDR_LEN_ANY, true);
+    table[idx(FlashCmd::DtrDualInputOutputFastRead)] = CommandTraits::create<{0, 4}, {0, 4}, {0, 0}>(FlashCmd::DtrDualInputOutputFastRead, AddressBytes::ADDR_LEN_ANY, true);
+    table[idx(FlashCmd::DualOutputFastRead4Byte)] = CommandTraits::create_addr_len_4<{8, 6}, {8, 6}, {0, 0}>(FlashCmd::DualOutputFastRead4Byte);
+    table[idx(FlashCmd::DualInputOutputFastRead4Byte)] = CommandTraits::create_addr_len_4<{4, 4}, {4, 4}, {0, 0}>(FlashCmd::DualInputOutputFastRead4Byte);
+    table[idx(FlashCmd::DtrDualInputOutputFastRead4Byte)] = CommandTraits::create_addr_len_4<{0, 4}, {0, 4}, {0, 0}>(FlashCmd::DtrDualInputOutputFastRead4Byte, true);
     // Program category command
     table[idx(FlashCmd::ProgramPage)] = CommandTraits::create(FlashCmd::ProgramPage); 
     table[idx(FlashCmd::QuadInputFastProgram)] = CommandTraits::create(FlashCmd::QuadInputFastProgram); 

@@ -105,6 +105,26 @@ static void exit_4bytes() {
     write_disable();
 }
 
+static void set_dual_spi() {
+    FlashDeviceConfig config;
+    read_register(FlashCmd::ReadVolatileConfigure, config);
+    config.dual_io = 0; // 0: enable, 1: disable (default)
+    write_register(FlashCmd::WriteVolatileConfigure, config);
+    config = {};
+    read_register(FlashCmd::ReadVolatileConfigure, config);
+    REQUIRE(config.dual_io == 0);
+}
+
+static void set_quad_spi() {
+    FlashDeviceConfig config;
+    read_register(FlashCmd::ReadVolatileConfigure, config);
+    config.quad_io = 0; // 0: enable, 1: disable (default)
+    write_register(FlashCmd::WriteVolatileConfigure, config);
+    config = {};
+    read_register(FlashCmd::ReadVolatileConfigure, config);
+    REQUIRE(config.quad_io == 0);
+}
+
 template <uint8_t AddrBytes, uint8_t DummyClocks>
 requires (ValidAddressMode<AddrBytes> && ValidSingleDummyCycle<DummyClocks>)
 void read_flash_test(const FlashCmd cmd) noexcept {
@@ -423,13 +443,7 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
     } 
 
     SECTION("101. SET QSPI 1-0-1") {
-        FlashDeviceConfig config;
-        read_register(FlashCmd::ReadVolatileConfigure, config);
-        config.quad_io = 0; // 0: enable, 1: disable (default)
-        write_register(FlashCmd::WriteVolatileConfigure, config);
-        config = {};
-        read_register(FlashCmd::ReadVolatileConfigure, config);
-        REQUIRE(config.quad_io == 0);
+        set_quad_spi();
     }
 
     SECTION("104. FAST_READ with 3-byte address 4-4-4 STR") {
@@ -538,7 +552,102 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
 
     SECTION("190. EXIT 4 BYTES 4-0-0") {
         exit_4bytes();
-    }  
+    }
+
+    // Dual SPI Tests
+    // ===============
+
+    SECTION("200. DUAL SPI MODE") {
+        set_dual_spi();
+
+        SECTION("201. DUAL_OUTPUT_FAST_READ with 3-byte address 1-1-2 STR") {
+            read_flash_test<3, 8>(FlashCmd::DualOutputFastRead);
+        }
+
+        SECTION("202. DUAL_I/O_FAST_READ with 3-byte address 1-2-2 STR") {
+            read_flash_test<3, 4>(FlashCmd::DualInputOutputFastRead);
+        }
+
+        SECTION("203. DUAL_OUTPUT_FAST_READ with 3-byte address 2-2-2 STR") {
+            read_flash_test<3, 8>(FlashCmd::DualOutputFastRead);
+        }
+
+        SECTION("204. DUAL_I/O_FAST_READ with 3-byte address 2-2-2 STR") {
+            read_flash_test<3, 4>(FlashCmd::DualInputOutputFastRead);
+        }
+
+        SECTION("205. DTR_DUAL_OUTPUT_FAST_READ with 3-byte address 1-1-2 DTR") {
+            read_flash_test<3, 6>(FlashCmd::DtrDualOutputFastRead);
+        }
+
+        SECTION("206. DTR_DUAL_I/O_FAST_READ with 3-byte address 1-2-2 DTR") {
+            read_flash_test<3, 4>(FlashCmd::DtrDualInputOutputFastRead);
+        }
+
+        SECTION("207. DTR_DUAL_OUTPUT_FAST_READ with 3-byte address 2-2-2 DTR") {
+            read_flash_test<3, 6>(FlashCmd::DtrDualOutputFastRead);
+        }
+
+        SECTION("208. DTR_DUAL_I/O_FAST_READ with 3-byte address 2-2-2 DTR") {
+            read_flash_test<3, 4>(FlashCmd::DtrDualInputOutputFastRead);
+        }
+
+        SECTION("209. ERASE_SECTOR with 3-byte address 2-2-0") {
+            erase_flash_test<3>(FlashCmd::EraseSector);
+        }
+
+        SECTION("210. ERASE_SUBSECTOR_32KB with 3-byte address 2-2-0") {
+            erase_flash_test<3>(FlashCmd::EraseSubsector32KB);
+        }
+
+        SECTION("211. ERASE_SUBSECTOR_4KB with 3-byte address 2-2-0") {
+            erase_flash_test<3>(FlashCmd::EraseSubsector4KB);
+        }
+
+        SECTION("212. ERASE_DIE with 3-byte address 2-2-0") {
+            erase_flash_test<3>(FlashCmd::EraseDie);
+        }
+
+        SECTION("213. PROGRAM_PAGE with 3-byte address 2-2-2") {
+            program_flash_test<3>(FlashCmd::ProgramPage);
+        }
+
+        SECTION("250. 4-BYTE ADDRESS MODE") {
+            enter_4bytes();
+
+            SECTION("251. DUAL_OUTPUT_FAST_READ_4BYTE with 4-byte address 2-2-2 STR") {
+                read_flash_test<4, 8>(FlashCmd::DualOutputFastRead4Byte);
+            }
+
+            SECTION("252. DUAL_I/O_FAST_READ_4BYTE with 4-byte address 2-2-2 STR") {
+                read_flash_test<4, 4>(FlashCmd::DualInputOutputFastRead4Byte);
+            }
+
+            SECTION("253. DTR_DUAL_I/O_FAST_READ_4BYTE with 4-byte address 2-2-2 DTR") {
+                read_flash_test<4, 4>(FlashCmd::DtrDualInputOutputFastRead4Byte);
+            }
+
+            SECTION("254. ERASE_SECTOR_4BYTE with 4-byte address 2-2-0") {
+                erase_flash_test<4>(FlashCmd::EraseSector4Byte);
+            }
+
+            SECTION("255. ERASE_SUBSECTOR_32KB_4BYTE with 4-byte address 2-2-0") {
+                erase_flash_test<4>(FlashCmd::EraseSubsector32KB4Byte);
+            }
+
+            SECTION("256. ERASE_SUBSECTOR_4KB_4BYTE with 4-byte address 2-2-0") {
+                erase_flash_test<4>(FlashCmd::EraseSubsector4KB4Byte);
+            }
+
+            SECTION("257. PROGRAM_PAGE_4BYTE with 4-byte address 2-2-2") {
+                program_flash_test<4>(FlashCmd::ProgramPage4Byte);
+            }
+
+            SECTION("290. EXIT 4 BYTES 2-0-0") {
+                exit_4bytes();
+            }
+        }
+    }
 }
 
 // A dedicated top-level SystemC wrapper module to manage the testbench lifecycle safely

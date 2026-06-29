@@ -89,7 +89,14 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, siz
         case FlashCmd::DtrFastRead4Byte:        
         case FlashCmd::QuadOutputFastRead4Byte:
         case FlashCmd::QuadInputOutputFastRead4Byte:
-        case FlashCmd::DtrQuadInputOutputFastRead4Byte:        
+        case FlashCmd::DtrQuadInputOutputFastRead4Byte:
+        case FlashCmd::DualOutputFastRead:
+        case FlashCmd::DualInputOutputFastRead:
+        case FlashCmd::DtrDualOutputFastRead:
+        case FlashCmd::DtrDualInputOutputFastRead:
+        case FlashCmd::DualOutputFastRead4Byte:
+        case FlashCmd::DualInputOutputFastRead4Byte:
+        case FlashCmd::DtrDualInputOutputFastRead4Byte:
             ret = read_flash(traits, stream, len); // You can expand this to handle the address and dummy cycles properly
             break;
 
