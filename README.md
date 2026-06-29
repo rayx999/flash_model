@@ -3,6 +3,7 @@ This is C++20 based behavior model for Nor flash. It's targeted for some product
 The model requires following external packages:
 - Accellera SystemC https://github.com/accellera-official/systemc/archive/refs/tags/3.0.2.tar.gz
 - Magic Number https://github.com/Neargye/magic_enum
+- Catch2 https://github.com/catchorg/Catch2
 
 ## Build
 ```
