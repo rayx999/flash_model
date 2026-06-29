@@ -57,8 +57,56 @@ static void write_disable() {
     REQUIRE(status == tlm::TLM_OK_RESPONSE);
 }
 
+static void read_register(FlashCmd cmd, FlashDeviceConfig& value) {
+    std::array<uint8_t, 3> spi_stream = {};
+    
+    spi_stream[0] = static_cast<uint8_t>(cmd); // Opcode
+    auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+    uint16_t raw = (static_cast<uint16_t>(spi_stream[1]) << 8) | spi_stream[2];
+    value = std::bit_cast<FlashDeviceConfig>(raw);
+}
+
+static void write_register(FlashCmd cmd, FlashDeviceConfig value) {
+    write_enable();
+
+    std::array<uint8_t, 3> spi_stream = {};
+    uint16_t raw = std::bit_cast<uint16_t>(value);
+    
+    spi_stream[0] = static_cast<uint8_t>(cmd); // Opcode
+    spi_stream[1] = raw >> 8;
+    spi_stream[2] = raw & 0xFF;
+    auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+    write_disable();
+}
+
+static void enter_4bytes() {
+    write_enable();
+
+    std::array<uint8_t, 1> spi_stream = {};
+    spi_stream[0] = static_cast<uint8_t>(FlashCmd::Enter4Byte); // Opcode
+    int status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+    write_disable();
+}
+
+static void exit_4bytes() {
+    write_enable();
+
+    std::array<uint8_t, 1> spi_stream = {};
+    spi_stream[0] = static_cast<uint8_t>(FlashCmd::Exit4Byte); // Opcode
+    int status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+    REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+    write_disable();
+}
+
 template <uint8_t AddrBytes, uint8_t DummyClocks>
-requires (ValidAddressMode<AddrBytes> && ValidDummyCycles<DummyClocks>)
+requires (ValidAddressMode<AddrBytes> && ValidSingleDummyCycle<DummyClocks>)
 void read_flash_test(const FlashCmd cmd) noexcept {
     REQUIRE(g_tb != nullptr); // Sanity check to ensure the global testbench pointer is valid
     REQUIRE(g_flash_device != nullptr); // Sanity check to ensure the global flash model pointer is valid
@@ -108,6 +156,8 @@ void erase_flash_test(const FlashCmd cmd) noexcept {
     REQUIRE(g_flash_device != nullptr); // Sanity check to ensure the global flash model pointer is valid
     REQUIRE(is_valid_flash_cmd(cmd)); // Ensure the command and protocol are valid
 
+    write_enable();
+
     uint32_t addr = std::rand() % (g_flash_device->get_capacity()); // Random address within bounds
     if (AddrBytes == 3) addr %= (0x1000000); // Ensure it fits within 3 bytes
     size_t size = g_flash_device->get_erase_size(cmd);
@@ -140,6 +190,8 @@ void erase_flash_test(const FlashCmd cmd) noexcept {
     fetch_flash_data(g_flash_device->get_back_file_name(), start, erased_data);
     // Explicitly forces an element-by-element deep comparison 
     REQUIRE(std::equal(erased_data.begin(), erased_data.end(), golden_data.begin(), golden_data.end()));
+
+    write_disable();
 }
 
 template <uint8_t AddrBytes> requires (ValidAddressMode<AddrBytes>)
@@ -147,6 +199,8 @@ void program_flash_test(const FlashCmd cmd) noexcept {
     REQUIRE(g_tb != nullptr); // Sanity check to ensure the global testbench pointer is valid
     REQUIRE(g_flash_device != nullptr); // Sanity check to ensure the global flash model pointer is valid
     REQUIRE(is_valid_flash_cmd(cmd)); // Ensure the command and protocol are valid
+
+    write_enable();
 
     uint32_t data_len = std::rand() % 256 + 1; // Random data length between 1 and 256 bytes
     size_t addr = std::rand() % (g_flash_device->get_capacity() - data_len); // Random address within bounds
@@ -182,6 +236,8 @@ void program_flash_test(const FlashCmd cmd) noexcept {
     fetch_flash_data(g_flash_device->get_back_file_name(), addr, program_data);
     // Explicitly forces an element-by-element deep comparison 
     REQUIRE(std::equal(program_data.begin(), program_data.end(), golden_data.begin(), golden_data.end()));
+
+    write_disable();
 }
 
 TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
@@ -249,62 +305,60 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
         read_flash_test<3, 8>(FlashCmd::DtrQuadInputOutputFastRead);
     }
 
+    SECTION("4. FAST_READ with 3-byte address 1-1-1 STR") {
+        read_flash_test<3, 8>(FlashCmd::FastRead);
+    }
+
+    SECTION("5. DTR_FAST_READ with 3-byte address 1-1-1 DTR") {
+        read_flash_test<3, 6>(FlashCmd::DtrFastRead);
+    }
+
+    SECTION("6. QUAD_OUTPUT_FAST_READ with 3-byte address 1-1-4 STR") {
+        read_flash_test<3, 8>(FlashCmd::QuadOutputFastRead);
+    }
+
+    SECTION("7. DTR_QUAD_OUTPUT_FAST_READ with 3-byte address 1-1-4 DTR") {
+        read_flash_test<3, 6>(FlashCmd::DtrQuadOutputFastRead);
+    }
+
+    SECTION("8. QUAD_INPUT_OUTPUT_FAST_READ with 3-byte address 1-4-4 STR") {
+        read_flash_test<3, 10>(FlashCmd::QuadInputOutputFastRead);
+    }
+
+    SECTION("9. DTR_QUAD_INPUT_OUTPUT_FAST_READ with 3-byte address 1-4-4 DTR") {
+        read_flash_test<3, 8>(FlashCmd::DtrQuadInputOutputFastRead);
+    }    
+
     SECTION("10. ERASE_SECTOR with 3-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<3>(FlashCmd::EraseSector);
-        write_disable();
     }
 
     SECTION("11. ERASE_SUBSECTOR_32KB with 3-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<3>(FlashCmd::EraseSubsector32KB);
-        write_disable();      
     }
 
     SECTION("12. ERASE_SUBSECTOR_4KB with 3-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<3>(FlashCmd::EraseSubsector4KB);
-        write_disable();    
     }
 
     SECTION("13. ERASE_DIE with 3-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<3>(FlashCmd::EraseDie);
-        write_disable();
     }
 
     SECTION("14. PROGRAM_PAGE with 3-byte address 1-1-1") {
-        write_enable();
         program_flash_test<3>(FlashCmd::ProgramPage);
-        write_disable();
     }
 
     SECTION("15. QUAD_INPUT_FAST_PROGRAM with 3-byte address 1-1-4") {
-        write_enable();
         program_flash_test<3>(FlashCmd::QuadInputFastProgram);
-        write_disable();
     }
 
     SECTION("16. EXTENDED_QUAD_INPUT_FAST_PROGRAM with 3-byte address 1-4-4") {
-        write_enable();
         program_flash_test<3>(FlashCmd::ExtendedQuadInputFastProgram);
-        write_disable();
     }
 
     SECTION("50. Enter 4-Byte Mode 1-0-0") {
-        std::array<uint8_t, 1> spi_stream;
-
-        spi_stream[0] = static_cast<uint8_t>(FlashCmd::WriteEnable); // Opcode
-        auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
-        REQUIRE(status == tlm::TLM_OK_RESPONSE);
-
-        spi_stream[0] = static_cast<uint8_t>(FlashCmd::Enter4Byte); // Opcode
-        status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
-        REQUIRE(status == tlm::TLM_OK_RESPONSE);
-
-        spi_stream[0] = static_cast<uint8_t>(FlashCmd::WriteDisable); // Opcode
-        status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
-        REQUIRE(status == tlm::TLM_OK_RESPONSE);
+        enter_4bytes();
     }
 
     SECTION("51. READ_4BYTE with 4-byte address 1-1-1") {
@@ -332,40 +386,159 @@ TEST_CASE("Micron Flash Model Protocol Stream Automated Tests", "[flash]") {
     }
 
     SECTION("57. ERASE_SECTOR_4BYTE with 4-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<4>(FlashCmd::EraseSector4Byte);
-        write_disable();
     }
 
     SECTION("58. ERASE_SUBSECTOR_32KB_4BYTE with 4-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<4>(FlashCmd::EraseSubsector32KB4Byte);
-        write_disable();      
     }
 
     SECTION("59. ERASE_SUBSECTOR_4KB_4BYTE with 4-byte address 1-1-0") {
-        write_enable();
         erase_flash_test<4>(FlashCmd::EraseSubsector4KB4Byte);
-        write_disable();    
     }
 
     SECTION("60. PROGRAM_PAGE_4BYTE with 4-byte address 1-1-1") {
-        write_enable();
         program_flash_test<4>(FlashCmd::ProgramPage4Byte);
-        write_disable();
     }
 
     SECTION("61. QUAD_INPUT_FAST_PROGRAM_4BYTE with 4-byte address 1-1-4") {
-        write_enable();
         program_flash_test<4>(FlashCmd::QuadInputFastProgram4Byte);
-        write_disable();
     }
 
     SECTION("62. EXTENDED_QUAD_INPUT_FAST_PROGRAM_4BYTE with 4-byte address 1-4-4") {
-        write_enable();
         program_flash_test<4>(FlashCmd::ExtendedQuadInputFastProgram4Byte);
-        write_disable();
-    }    
+    } 
+    
+    // QSPI
+    SECTION("100. RESET 1-0-0") {
+        std::array<uint8_t, 1> spi_stream;
+
+        spi_stream[0] = static_cast<uint8_t>(FlashCmd::ResetEnable); // Opcode
+        auto status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+        REQUIRE(status == tlm::TLM_OK_RESPONSE);
+
+        spi_stream[0] = static_cast<uint8_t>(FlashCmd::ResetMemory); // Opcode
+        status = g_tb->exchange_stream(spi_stream.data(), spi_stream.size());
+        REQUIRE(status == tlm::TLM_OK_RESPONSE);
+    } 
+
+    SECTION("101. SET QSPI 1-0-1") {
+        FlashDeviceConfig config;
+        read_register(FlashCmd::ReadVolatileConfigure, config);
+        config.quad_io = 0; // 0: enable, 1: disable (default)
+        write_register(FlashCmd::WriteVolatileConfigure, config);
+        config = {};
+        read_register(FlashCmd::ReadVolatileConfigure, config);
+        REQUIRE(config.quad_io == 0);
+    }
+
+    SECTION("104. FAST_READ with 3-byte address 4-4-4 STR") {
+        read_flash_test<3, 10>(FlashCmd::FastRead);
+    }
+
+    SECTION("105. DTR_FAST_READ with 3-byte address 4-4-4 DTR") {
+        read_flash_test<3, 8>(FlashCmd::DtrFastRead);
+    }
+
+    SECTION("106. QUAD_OUTPUT_FAST_READ with 3-byte address 4-4-4 STR") {
+        read_flash_test<3, 10>(FlashCmd::QuadOutputFastRead);
+    }
+
+    SECTION("107. DTR_QUAD_OUTPUT_FAST_READ with 3-byte address 4-4-4 DTR") {
+        read_flash_test<3, 8>(FlashCmd::DtrQuadOutputFastRead);
+    }
+
+    SECTION("108. QUAD_INPUT_OUTPUT_FAST_READ with 3-byte address 4-4-4 STR") {
+        read_flash_test<3, 10>(FlashCmd::QuadInputOutputFastRead);
+    }
+
+    SECTION("109. DTR_QUAD_INPUT_OUTPUT_FAST_READ with 3-byte address 4-4-4 DTR") {
+        read_flash_test<3, 8>(FlashCmd::DtrQuadInputOutputFastRead);
+    }
+
+    SECTION("110. ERASE_SECTOR with 3-byte address 4-4-0") {
+        erase_flash_test<3>(FlashCmd::EraseSector);
+    }
+
+    SECTION("111. ERASE_SUBSECTOR_32KB with 3-byte address 4-4-0") {
+        erase_flash_test<3>(FlashCmd::EraseSubsector32KB);
+    }
+
+    SECTION("112. ERASE_SUBSECTOR_4KB with 3-byte address 4-4-0") {
+        erase_flash_test<3>(FlashCmd::EraseSubsector4KB);
+    }
+
+    SECTION("113. ERASE_DIE with 3-byte address 4-4-0") {
+        erase_flash_test<3>(FlashCmd::EraseDie);
+    }
+
+    SECTION("114. PROGRAM_PAGE with 3-byte address 4-4-4") {
+        program_flash_test<3>(FlashCmd::ProgramPage);
+    }
+
+    SECTION("115. QUAD_INPUT_FAST_PROGRAM with 3-byte address 4-4-4") {
+        program_flash_test<3>(FlashCmd::QuadInputFastProgram);
+    }
+
+    SECTION("116. EXTENDED_QUAD_INPUT_FAST_PROGRAM with 3-byte address 4-4-4") {
+        program_flash_test<3>(FlashCmd::ExtendedQuadInputFastProgram);
+    } 
+    
+    SECTION("150. Enter 4-Byte Mode 4-0-0") {
+        enter_4bytes();
+    }
+
+    SECTION("151. READ_4BYTE with 4-byte address 4-4-4") {
+        read_flash_test<4, 0>(FlashCmd::Read4Byte);
+    }
+
+    SECTION("152. FAST_READ_4BYTE with 4-byte address 4-4-4 STR") {
+        read_flash_test<4, 10>(FlashCmd::FastRead4Byte);
+    }
+
+    SECTION("153. DTR_FAST_READ_4BYTE with 4-byte address 4-4-4 DTR") {
+        read_flash_test<4, 8>(FlashCmd::DtrFastRead4Byte);
+    }
+
+    SECTION("154. QUAD_OUTPUT_FAST_READ_4BYTE with 4-byte address 4-4-4 STR") {
+        read_flash_test<4, 10>(FlashCmd::QuadOutputFastRead4Byte);
+    }
+
+    SECTION("155. QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 4-4-4 STR") {
+        read_flash_test<4, 10>(FlashCmd::QuadInputOutputFastRead4Byte);
+    }
+
+    SECTION("156. DTR_QUAD_INPUT/OUTPUT_FAST_READ_4BYTE with 4-byte address 4-4-4 STR") {
+        read_flash_test<4, 8>(FlashCmd::DtrQuadInputOutputFastRead4Byte);
+    }
+
+    SECTION("157. ERASE_SECTOR_4BYTE with 4-byte address 4-4-0") {
+        erase_flash_test<4>(FlashCmd::EraseSector4Byte);
+    }
+
+    SECTION("158. ERASE_SUBSECTOR_32KB_4BYTE with 4-byte address 4-4-0") {
+        erase_flash_test<4>(FlashCmd::EraseSubsector32KB4Byte);
+    }
+
+    SECTION("159. ERASE_SUBSECTOR_4KB_4BYTE with 4-byte address 4-4-0") {
+        erase_flash_test<4>(FlashCmd::EraseSubsector4KB4Byte);
+    }
+
+    SECTION("160. PROGRAM_PAGE_4BYTE with 4-byte address 4-4-4") {
+        program_flash_test<4>(FlashCmd::ProgramPage4Byte);
+    }
+
+    SECTION("161. QUAD_INPUT_FAST_PROGRAM_4BYTE with 4-byte address 4-4-4") {
+        program_flash_test<4>(FlashCmd::QuadInputFastProgram4Byte);
+    }
+
+    SECTION("162. EXTENDED_QUAD_INPUT_FAST_PROGRAM_4BYTE with 4-byte address 4-4-4") {
+        program_flash_test<4>(FlashCmd::ExtendedQuadInputFastProgram4Byte);
+    }     
+
+    SECTION("190. EXIT 4 BYTES 4-0-0") {
+        exit_4bytes();
+    }  
 }
 
 // A dedicated top-level SystemC wrapper module to manage the testbench lifecycle safely

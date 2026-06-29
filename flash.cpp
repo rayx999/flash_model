@@ -35,7 +35,7 @@ void FlashModel<T>::b_transport(tlm::tlm_generic_payload& trans, [[maybe_unused]
 
 // Command controller execution unit
 template <typename T>
-int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, unsigned int len) noexcept {
+int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, size_t len) noexcept {
     int ret = 0; // Default to success
 
     switch (traits.cmd) {
@@ -44,21 +44,22 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
             break;
         case FlashCmd::ResetMemory:
             if (m_reset_enabled) {
-                m_reset_enabled = false;
-                SC_REPORT_INFO("FlashModel", "Software Reset Memory sequence successful.");
+                ret = reset_memory();
+            } else {
+                ret = -1;
             }
             break;
         case FlashCmd::ReadId:
             ret = read_id(stream, len);
             break;
         case FlashCmd::ReadSFDP:
-            ret = read_sfdp(stream, len, traits.dummy_clocks_str); // You can expand this to handle the address and dummy cycles properly
+            ret = read_sfdp(traits, stream, len); // You can expand this to handle the address and dummy cycles properly
             break;
         case FlashCmd::WriteEnable:
-                m_write_enabled = true;
+            m_write_enabled = true;
             break;
         case FlashCmd::WriteDisable:
-                m_write_enabled = false;
+            m_write_enabled = false;
             break;
         case FlashCmd::Enter4Byte:
         case FlashCmd::Exit4Byte:
@@ -69,6 +70,12 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
                     "Address mode switch command %s executed successfully.",
                     traits.cmd == FlashCmd::Enter4Byte ? "Enter4Byte" : "Exit4Byte").c_str());
             } 
+            break;
+        case FlashCmd::ReadVolatileConfigure:
+            ret = read_register(stream, len);
+            break;
+        case FlashCmd::WriteVolatileConfigure:
+            ret = write_register(stream, len);
             break;
         case FlashCmd::Read:
         case FlashCmd::FastRead:
@@ -117,7 +124,17 @@ int FlashModel<T>::process_flash_cmd(CommandTraits& traits, uint8_t* stream, uns
 }
 
 template <typename T>
-int FlashModel<T>::read_id(uint8_t* stream, unsigned int len) noexcept {
+int FlashModel<T>::reset_memory() noexcept {
+    T::profile.config = FlashDeviceConfig();
+    m_reset_enabled = false;
+    m_write_enabled = false;
+
+    SC_REPORT_INFO("FlashModel", "Reset_Memory successful.");
+    return 0;    
+}
+
+template <typename T>
+int FlashModel<T>::read_id(uint8_t* stream, size_t len) noexcept {
     // Populate the data stream with the expected JEDEC ID values
     if (len >= 3) {
         stream[0] = T::profile.jedec_id[0]; // Manufacturer ID 
@@ -133,15 +150,15 @@ int FlashModel<T>::read_id(uint8_t* stream, unsigned int len) noexcept {
 }
 
 template <typename T>
-int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_clocks) noexcept {
+int FlashModel<T>::read_sfdp(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept {
     uint32_t addr = get_addr(stream + 1, 3); // SFDP read always assume 3 bytes address after the opcode
     uint32_t dummy_cycles = stream[4]; //
     uint32_t hdr_len = 1 + 3 + 1; // Opcode + Address Bytes + Dummy Cycles Byte 
 
-    if (dummy_cycles != dummy_clocks) {
+    if (dummy_cycles != get_dummy_clocks<T>(traits)) {
         SC_REPORT_WARNING("FlashModel", make_msg(
             "Provided dummy cycles %d do not match the expected value %d for this command.", 
-            dummy_cycles, dummy_clocks).c_str());
+            dummy_cycles, get_dummy_clocks<T>(traits)).c_str());
     }
 
     if (addr + len > T::profile.sfdp.size()) {
@@ -157,14 +174,46 @@ int FlashModel<T>::read_sfdp(uint8_t* stream, unsigned int len, uint32_t dummy_c
 }
 
 template <typename T>
-int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept {
-    BusProtocol protocol = T::get_bus_protocol();
-    if (protocol != traits.protocol) [[unlikely]] {
-        SC_REPORT_WARNING("FlashModel", make_msg(
-            "Read_Flash failed. Provided bus protocol %d do not match the expected value %d for this command 0x%02X.", 
-            protocol, traits.protocol, traits.cmd).c_str());
+int FlashModel<T>::read_register(uint8_t* stream, size_t len) noexcept {
+    if (len < 3) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Read_Register failed. Provided buffer length %d is too small to hold the 2 bytes register.",
+            len).c_str());
+        return -1; // Indicate an error if the buffer is too small to hold the command header
+    }    
+
+    uint16_t raw = std::bit_cast<uint16_t>(T::profile.config);
+    stream[1] = raw >> 8;
+    stream[2] = raw & 0xFF;
+
+    SC_REPORT_INFO("FlashModel", "Read_Register successful.");
+    return 0;
+}
+
+template <typename T>
+int FlashModel<T>::write_register(uint8_t* stream, size_t len) noexcept {
+    if (!m_write_enabled) {
+         SC_REPORT_ERROR("FlashModel", make_msg(
+            "Read_Wite failed. Write NOT enabled.").c_str());
+        return -1; // Indicate an error if the buffer is too small to hold the command header       
     }
 
+    if (len < 3) {
+        SC_REPORT_ERROR("FlashModel", make_msg(
+            "Read_Wite failed. Provided buffer length %d is too small to hold the 2 bytes register.",
+            len).c_str());
+        return -1; // Indicate an error if the buffer is too small to hold the command header
+    }    
+
+    uint16_t raw = (static_cast<uint16_t>(stream[1] << 8)) | stream[2];
+    T::profile.config = std::bit_cast<FlashDeviceConfig>(raw);
+
+    SC_REPORT_INFO("FlashModel", "Write_Register successful.");
+    return 0;
+}
+
+template <typename T>
+int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size_t len) noexcept {
     AddressBytes address_len = T::get_addr_len();
     if (traits.requested_address_bytes != AddressBytes::ADDR_LEN_ANY &&
         traits.requested_address_bytes != address_len) {
@@ -186,19 +235,11 @@ int FlashModel<T>::read_flash(const CommandTraits& traits, uint8_t* stream, size
     uint32_t addr = get_addr(stream + 1, addr_len); // Read the address bytes based on the command traits
     uint32_t dummy_cycles = stream[1 + addr_len]; // Read the dummy cycles byte that follows the address bytes
 
-    TransferRate transfer_rate = T::get_transfer_rate();
-    if ((!traits.force_dtr && transfer_rate == TransferRate::STR) && dummy_cycles != traits.dummy_clocks_str) [[unlikely]] {
+    if (dummy_cycles != get_dummy_clocks<T>(traits)) [[unlikely]] {
         SC_REPORT_ERROR("FlashModel", make_msg(
-            "Provided dummy cycles %d do not match the expected DTR dummy cycles %d for this command 0x%02X.", 
-            dummy_cycles, traits.dummy_clocks_str, traits.cmd).c_str());
+            "Provided dummy cycles %d do not match the expected dummy cycles %d for this command 0x%02X.", 
+            dummy_cycles, get_dummy_clocks<T>(traits), traits.cmd).c_str());
         return -1;
-    }
-
-    if ((traits.force_dtr || transfer_rate == TransferRate::DTR) && dummy_cycles != traits.dummy_clocks_dtr) [[unlikely]] {
-        SC_REPORT_ERROR("FlashModel", make_msg(
-            "Provided dummy cycles %d do not match the expected STR dummy cycles %d for this command 0x%02X.", 
-            dummy_cycles, traits.dummy_clocks_dtr, traits.cmd).c_str());
-            return -1;
     }
 
     if (addr + len > get_capacity()) [[unlikely]] {
@@ -219,13 +260,6 @@ int FlashModel<T>::erase_flash(const CommandTraits& traits, uint8_t* stream, siz
         SC_REPORT_ERROR("FlashModel", make_msg(
             "Erase_Flash failed. write_enable is false.").c_str());
         return -1;
-    }
-
-    BusProtocol protocol = T::get_bus_protocol();
-    if (protocol != traits.protocol) [[unlikely]] {
-        SC_REPORT_WARNING("FlashModel", make_msg(
-            "Erase_Flash failed. Provided bus protocol %d do not match the expected value %d for this command 0x%02X.", 
-            protocol, traits.protocol, traits.cmd).c_str());
     }
 
     AddressBytes address_len = T::get_addr_len();
@@ -270,13 +304,6 @@ int FlashModel<T>::program_flash(const CommandTraits& traits, uint8_t* stream, s
         SC_REPORT_ERROR("FlashModel", make_msg(
             "Program_Flash failed. write_enable is false.").c_str());
         return -1;
-    }
-
-    BusProtocol protocol = T::get_bus_protocol();
-    if (protocol != traits.protocol) [[unlikely]] {
-        SC_REPORT_WARNING("FlashModel", make_msg(
-            "Program_Flash failed. Provided bus protocol %d do not match the expected value %d for this command 0x%02X.", 
-            protocol, traits.protocol, traits.cmd).c_str());
     }
 
     AddressBytes address_len = T::get_addr_len();
